@@ -1,0 +1,33 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 764cbf5325502a9836710b1c218e03d2356cd192..85dc67f553dbf8b58dd5556b2be8a111c926f289 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -703,6 +703,10 @@ function getMappedStream(response, salvageContext) {
+ 			if (choiceFinishReason != null) finishReason = mapWorkersAIFinishReason(choiceFinishReason);
+ 			else if (directFinishReason != null) finishReason = mapWorkersAIFinishReason(directFinishReason);
+ 			const nativeResponse = chunk.response;
++			// PATCH: Workers AI can send the same delta in both native and OpenAI format in one chunk.
++			// Track what the native branch emitted so the OpenAI branch below doesn't emit it twice.
++			const emittedNativeText = nativeResponse != null && nativeResponse !== "";
++			const emittedNativeToolCalls = Array.isArray(chunk.tool_calls) && chunk.tool_calls.length > 0;
+ 			if (nativeResponse != null && nativeResponse !== "") {
+ 				const responseText = String(nativeResponse);
+ 				if (responseText.length > 0) if (bufferContentForSalvage) contentBuffer += responseText;
+@@ -755,7 +759,7 @@ function getMappedStream(response, salvageContext) {
+ 						delta: reasoningDelta
+ 					});
+ 				}
+-				const textDelta = delta.content;
++				const textDelta = emittedNativeText ? undefined : delta.content;
+ 				if (textDelta && textDelta.length > 0) if (bufferContentForSalvage) contentBuffer += textDelta;
+ 				else {
+ 					if (reasoningId) {
+@@ -778,7 +782,7 @@ function getMappedStream(response, salvageContext) {
+ 						delta: textDelta
+ 					});
+ 				}
+-				const deltaToolCalls = delta.tool_calls;
++				const deltaToolCalls = emittedNativeToolCalls ? undefined : delta.tool_calls;
+ 				if (Array.isArray(deltaToolCalls)) {
+ 					if (reasoningId) {
+ 						controller.enqueue({

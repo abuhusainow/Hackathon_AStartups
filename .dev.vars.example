@@ -1,0 +1,6 @@
+# Copy to .dev.vars (never commit .dev.vars!) and fill in your keys.
+GEMINI_API_KEY=your-gemini-api-key
+# Any long random string, e.g. `openssl rand -hex 32`
+SESSION_SECRET=change-me-to-a-long-random-string
+# Optional: Claude as decision model for the memory
+ANTHROPIC_API_KEY=

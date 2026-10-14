@@ -1,0 +1,88 @@
+/**
+ * Wrangler configuration for IDA – Bürgerservice KI.
+ * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * Secrets (never commit them – put them in .dev.vars locally, `wrangler secret put` in production):
+ *   GEMINI_API_KEY      required – Gemini text, Live voice, dictation, translation
+ *   SESSION_SECRET      required in production – signs the simulated ID Austria session cookie
+ *   ANTHROPIC_API_KEY   optional – enables Claude as decision model for the memory
+ *
+ * After changing bindings, run `pnpm cf-typegen` to regenerate the `Env` types.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "ida-buergerservice",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-06",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+
+	// Workers AI – fallback chat model and default decision model for the memory.
+	"ai": {
+		"binding": "AI"
+	},
+
+	// D1 – mock e-government database + the assistant's memory (user_memory, conversation_summaries).
+	// No database_id needed: Wrangler creates the database automatically on first deploy.
+	"d1_databases": [
+		{
+			"binding": "GOV_DB",
+			"database_name": "ida-gov-db"
+		}
+	],
+
+	// KV – cache for form and UI translations ("<formId>:<version>:<lang>").
+	// No id needed: Wrangler creates the namespace automatically on first deploy.
+	"kv_namespaces": [
+		{
+			"binding": "CACHE"
+		}
+	],
+
+	// Durable Object – one chat agent instance per citizen session (stores the conversation).
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CitizenAssistant",
+				"class_name": "CitizenAssistant"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["CitizenAssistant"]
+		}
+	],
+
+	// Static assets – the React frontend (built by Vite). API and agent routes run in the Worker first.
+	"assets": {
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*", "/agents/*"]
+	},
+
+	"vars": {
+		// Gemini models (https://ai.google.dev/gemini-api/docs/models)
+		"GEMINI_TEXT_MODEL": "gemini-3.8-flash",
+		// Tried in order when a model answers "high demand" (429/5xx).
+		"GEMINI_TEXT_FALLBACKS": "gemini-3.6-flash,gemini-3.1-flash-lite",
+		"GEMINI_LIVE_MODEL": "gemini-3.8-live",
+		"GEMINI_LIVE_FALLBACKS": "gemini-2.5-flash-native-audio-latest",
+		"GEMINI_TRANSCRIBE_MODEL": "gemini-3.5-transcribe-live",
+		"GEMINI_TRANSLATE_MODEL": "gemini-3.5-flash-lite",
+		"GEMINI_LIVE_VOICE": "Kore",
+		// Decision model for the memory: "auto" = Claude if ANTHROPIC_API_KEY is set, else Workers AI, else Gemini.
+		"MEMORY_PROVIDER": "auto",
+		"CLAUDE_MODEL": "claude-sonnet-5-5",
+		"WORKERS_AI_MODEL": "@cf/zai-org/glm-4.7-flash",
+		// AI Gateway (logs, caching, rate limits). "true" routes Gemini and Claude through the gateway below.
+		"AI_GATEWAY_ID": "default",
+		"ROUTE_VIA_AI_GATEWAY": "false",
+		// Mock backend behaviour – use these to test how the assistant handles slow or failing services.
+		"MOCK_FAILURE_RATE": "0",
+		"MOCK_LATENCY_MS": "0"
+	}
+}
