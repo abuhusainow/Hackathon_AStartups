@@ -127,16 +127,20 @@ export function withFallback(models: any[]): LanguageModel {
 	} as LanguageModel;
 }
 
-async function geminiWithFallback(env: Env): Promise<LanguageModel> {
+/**
+ * Gemini models in order of preference, with Workers AI as the last resort (same AI SDK spec v4),
+ * so the assistant keeps working when the Gemini quota is exhausted (e.g. free tier: 15 requests/min).
+ */
+async function geminiWithFallback(env: Env, metadata: Record<string, string>): Promise<LanguageModel> {
 	const google = createGoogleGenerativeAI({ apiKey: env.GEMINI_API_KEY, baseURL: await providerBaseUrl(env, "google-ai-studio") });
 	const ids = modelIds(env);
-	return withFallback([ids.text, ...ids.textFallbacks].map((id) => google(id)));
+	return withFallback([...[ids.text, ...ids.textFallbacks].map((id) => google(id)), workersAiModel(env, metadata)]);
 }
 
 /** The chat model (text chat with tools). */
 export async function getChatModel(env: Env, metadata: Record<string, string> = {}): Promise<LanguageModel> {
 	if (!hasGemini(env)) return workersAiModel(env, metadata);
-	return geminiWithFallback(env);
+	return geminiWithFallback(env, metadata);
 }
 
 export type DecisionProvider = "claude" | "workers-ai" | "gemini";
@@ -158,6 +162,6 @@ export async function getDecisionModel(env: Env, metadata: Record<string, string
 		const anthropic = createAnthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: await providerBaseUrl(env, "anthropic") });
 		return { model: anthropic(modelIds(env).claude), provider };
 	}
-	if (provider === "gemini") return { model: await geminiWithFallback(env), provider };
+	if (provider === "gemini") return { model: await geminiWithFallback(env, metadata), provider };
 	return { model: workersAiModel(env, { ...metadata, purpose: "memory" }), provider };
 }

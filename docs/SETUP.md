@@ -16,6 +16,11 @@ Rechnen Sie mit ca. 20–30 Minuten.
 | Gemini-API-Key | – | https://aistudio.google.com/apikey |
 | *(optional)* Anthropic-API-Key für Claude als Gedächtnis-Modell | – | https://console.anthropic.com |
 
+> ⚠️ **Gemini-Kontingent:** Ein Key im **Free Tier** erlaubt nur wenige Anfragen pro Minute/Tag
+> (z. B. 15/min für Flash-Lite). Eine einzige Chat-Antwort mit Werkzeugen braucht mehrere Anfragen.
+> Für Demo und Jury unbedingt **Billing im Google-AI-Studio-Projekt aktivieren** (AI Studio → Settings → Billing).
+> IDA weicht bei 429/503 automatisch auf Ersatzmodelle und zuletzt auf Workers AI (Hackathon-Credits) aus.
+
 > ⚠️ **Sicherheit:** API-Keys gehören **nie** ins Repository, in Chats oder Screenshots.
 > Der Gemini-Key aus der Projektbeschreibung wurde im Chat geteilt – erzeugen Sie nach dem Hackathon einen neuen Key
 > (AI Studio → API keys → Key löschen / neu erstellen).
