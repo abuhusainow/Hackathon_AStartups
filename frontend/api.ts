@@ -38,7 +38,29 @@ export type SubmissionResult = {
 	nextSteps: string[];
 };
 
-export type BookingResult = { type: "booking_result"; referenceNumber: string; serviceName: string; office: string; slotTime: string; nextSteps: string[] };
+export type BookingResult = {
+	type: "booking_result";
+	bookingId: string;
+	referenceNumber: string;
+	serviceName: string;
+	office: string;
+	slotTime: string;
+	nextSteps: string[];
+};
+
+export type Slot = { id: string; office: string; serviceId: string; slotTime: string };
+
+export type MyAppointment = {
+	bookingId: string;
+	serviceId: string;
+	serviceName: string;
+	office: string;
+	slotTime: string;
+	referenceNumber: string;
+	status: "booked" | "cancelled";
+	past: boolean;
+	nextSteps: string[];
+};
 
 export class ApiError extends Error {
 	constructor(
@@ -80,4 +102,8 @@ export const api = {
 		post<{ applicationId: string; missingOrInvalid: string[]; formMissing: string[] }>(`/api/forms/${formId}/draft`, { values, lang }),
 	submitForm: (formId: string, values: Record<string, string>, lang: string) => post<SubmissionResult>(`/api/forms/${formId}/submit`, { values, lang }),
 	bookAppointment: (slotId: string, lang: string) => post<BookingResult>(`/api/appointments/${encodeURIComponent(slotId)}/book?lang=${lang}`),
+	appointments: (lang: string) => request<{ upcoming: MyAppointment[]; history: MyAppointment[] }>(`/api/appointments?lang=${lang}`),
+	appointmentServices: (lang: string) => request<{ id: string; name: string }[]>(`/api/appointments/services?lang=${lang}`),
+	appointmentSlots: (serviceId: string) => request<{ slots: Slot[] }>(`/api/appointments/slots?serviceId=${encodeURIComponent(serviceId)}`),
+	cancelAppointment: (bookingId: string) => post<{ cancelled: boolean }>(`/api/appointments/${encodeURIComponent(bookingId)}/cancel`),
 };

@@ -7,7 +7,7 @@ export const SERVER_TOOL_NAMES = [
 	"find_services",
 	"get_service_info",
 	"check_eligibility",
-	"get_appointment_slots",
+	"get_my_appointments",
 	"create_handoff",
 	"remember",
 	"forget",
@@ -22,6 +22,7 @@ export const CLIENT_TOOL_NAMES = [
 	"show_original",
 	"set_ui_preferences",
 	"request_submission",
+	"show_appointment_slots",
 	"request_appointment_booking",
 	"close_form",
 ] as const;

@@ -19,10 +19,13 @@ type Props = {
 	onClose: () => void;
 	onSubmit: () => void;
 	onAskIda: (fieldLabel: string) => void;
-	onDictateField: (fieldId: string, label: string) => void;
+	/** Toggles inline dictation into a field. */
+	onDictateField: (fieldId: string) => void;
+	/** Field that is currently being dictated into (recording indicator). */
+	dictatingField: string | null;
 };
 
-export function FormPanel({ t, uiLanguage, onClose, onSubmit, onAskIda, onDictateField }: Props) {
+export function FormPanel({ t, uiLanguage, onClose, onSubmit, onAskIda, onDictateField, dictatingField }: Props) {
 	const s = useFormStore();
 	const form = s.formId ? getForm(s.formId) : undefined;
 	const [peek, setPeek] = useState(false);
@@ -177,7 +180,7 @@ export function FormPanel({ t, uiLanguage, onClose, onSubmit, onAskIda, onDictat
 			<div
 				key={f.id}
 				id={`pf-${f.id}`}
-				className={`pf${auto === "ida" ? " ida-filled" : ""}${s.highlight === f.id ? " highlight" : ""}`}
+				className={`pf${auto === "ida" ? " ida-filled" : ""}${s.highlight === f.id ? " highlight" : ""}${dictatingField === f.id ? " dictating" : ""}`}
 				style={{ "--span": f.span ?? 12 } as React.CSSProperties}
 			>
 				{control}
@@ -196,9 +199,16 @@ export function FormPanel({ t, uiLanguage, onClose, onSubmit, onAskIda, onDictat
 				)}
 				<div className="pf-actions">
 					{canType && (
-						<button type="button" title={t("formDictateField")} aria-label={`${t("formDictateField")}: ${trText(`f.${f.id}`, f.label)}`} onClick={() => onDictateField(f.id, f.label)}>
+						<button
+							type="button"
+							className={dictatingField === f.id ? "recording" : undefined}
+							aria-pressed={dictatingField === f.id}
+							title={dictatingField === f.id ? t("dictEnd") : t("formDictateField")}
+							aria-label={`${dictatingField === f.id ? t("dictEnd") : t("formDictateField")}: ${trText(`f.${f.id}`, f.label)}`}
+							onClick={() => onDictateField(f.id)}
+						>
 							<span className="material-symbols-outlined" aria-hidden="true">
-								mic
+								{dictatingField === f.id ? "stop_circle" : "mic"}
 							</span>
 						</button>
 					)}

@@ -13,6 +13,10 @@ import { HUMAN_CONTACT } from "./data/contact";
 import { getServiceDefinition, SERVICES } from "./data/services";
 import {
 	dbBookSlot,
+	dbCancelBooking,
+	dbGetBooking,
+	dbInsertBooking,
+	dbListBookings,
 	dbGetApplication,
 	dbGetCitizen,
 	dbGetDraft,
@@ -347,16 +351,69 @@ export async function bookAppointment(env: Env, citizenId: string, slotId: strin
 	const booked = await dbBookSlot(db, slotId, citizenId);
 	if (!booked) throw new GovError(409, "This slot was just taken. Please choose another slot.");
 	const def = requireService(slot.serviceId);
+	const booking = {
+		id: newId("bkg"),
+		citizenId,
+		slotId: slot.id,
+		serviceId: slot.serviceId,
+		office: slot.office,
+		slotTime: slot.slotTime,
+		referenceNumber: `TERMIN-${slot.id.slice(-3)}-${Math.floor(1000 + Math.random() * 9000)}`,
+		status: "booked" as const,
+		createdAt: new Date().toISOString(),
+	};
+	await dbInsertBooking(db, booking);
 	return {
 		type: "booking_result" as const,
 		success: true,
-		referenceNumber: `TERMIN-${slot.id.slice(-3)}-${Math.floor(1000 + Math.random() * 9000)}`,
+		bookingId: booking.id,
+		referenceNumber: booking.referenceNumber,
 		serviceName: def.name[lang],
 		office: slot.office,
 		slotTime: slot.slotTime,
 		nextSteps: def.nextSteps[lang],
 		mock: true,
 	};
+}
+
+/** The citizen's appointments ("Meine Termine"), upcoming first. */
+export async function listMyAppointments(env: Env, citizenId: string, lang: Language = "de") {
+	const db = await ready(env);
+	const now = nowVienna();
+	const bookings = await dbListBookings(db, citizenId);
+	const view = bookings.map((b) => {
+		const def = getServiceDefinition(b.serviceId);
+		return {
+			bookingId: b.id,
+			serviceId: b.serviceId,
+			serviceName: def?.name[lang] ?? b.serviceId,
+			office: b.office,
+			slotTime: b.slotTime,
+			referenceNumber: b.referenceNumber,
+			status: b.status,
+			past: b.slotTime < now,
+			nextSteps: def?.nextSteps[lang] ?? [],
+		};
+	});
+	return {
+		upcoming: view.filter((a) => a.status === "booked" && !a.past),
+		history: view.filter((a) => a.status === "cancelled" || a.past).reverse(),
+	};
+}
+
+export async function cancelAppointment(env: Env, citizenId: string, bookingId: string) {
+	const db = await ready(env);
+	const booking = await dbGetBooking(db, bookingId);
+	// Same answer for "unknown" and "someone else's booking" – no information leak.
+	if (!booking || booking.citizenId !== citizenId) throw new GovError(404, `Unknown appointment "${bookingId}"`);
+	if (booking.status === "cancelled") throw new GovError(409, "This appointment was already cancelled.");
+	await dbCancelBooking(db, booking);
+	return { cancelled: true, bookingId, referenceNumber: booking.referenceNumber };
+}
+
+/** Services that need a personal appointment (offered on the "Meine Termine" page). */
+export function appointmentServices(lang: Language = "de") {
+	return SERVICES.filter((s) => s.requiresAppointment).map((s) => ({ id: s.id, name: s.name[lang] }));
 }
 
 // ---------------------------------------------------------------------------------------------

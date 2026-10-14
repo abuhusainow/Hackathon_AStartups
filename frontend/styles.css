@@ -617,10 +617,13 @@ a {
 		border-bottom-color: var(--primary-container);
 		color: var(--primary-container);
 	}
-	.header-nav,
 	.header-right .v-divider,
-	.brand-sub {
+	.brand-sub,
+	.header-nav .nav-safe {
 		display: none;
+	}
+	.header-nav a {
+		padding: 8px;
 	}
 	.app-header-inner {
 		padding: 0 12px;
@@ -1751,6 +1754,278 @@ textarea.pf-input {
 }
 
 /* ------------------------------------------------------------------------------------------- */
+/* Inline dictation                                                                             */
+/* ------------------------------------------------------------------------------------------- */
+
+.dictate-btn.recording,
+.pf-actions button.recording {
+	background: var(--secondary);
+	color: #fff;
+	box-shadow: 0 0 0 calc(2px + var(--dict-level, 0) * 8px) rgba(187, 0, 39, 0.25);
+	transition: box-shadow 0.08s linear;
+	animation: blink 1.4s infinite;
+}
+.input-bar textarea.dictating::placeholder {
+	color: var(--secondary);
+	font-weight: 500;
+}
+.pf.dictating .pf-input {
+	border-color: var(--secondary);
+	box-shadow: 0 0 0 3px rgba(187, 0, 39, 0.2);
+}
+.pf.dictating .pf-actions {
+	opacity: 1;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+/* Reference numbers                                                                            */
+/* ------------------------------------------------------------------------------------------- */
+
+.ref-line {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.ref {
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	font-variant-numeric: tabular-nums;
+	background: var(--surface-low);
+	border: 1px solid var(--border-default);
+	border-radius: var(--radius);
+	padding: 1px 8px;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+/* Appointment selection (slot picker)                                                          */
+/* ------------------------------------------------------------------------------------------- */
+
+.appt-panel-inner {
+	max-width: 860px;
+	margin: 0 auto;
+	background: var(--surface-lowest);
+	border-radius: var(--radius-lg);
+	padding: 24px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.appt-h3 {
+	margin: 4px 0 12px;
+	font-size: 1.125rem;
+}
+.slot-days {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+.slot-day h4 {
+	margin: 0 0 8px;
+	font-size: 1rem;
+	text-transform: capitalize;
+	border-bottom: 1px solid var(--border-default);
+	padding-bottom: 4px;
+}
+.slot-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	gap: 8px;
+}
+.slot-list li {
+	display: flex;
+}
+.slot {
+	width: 100%;
+	height: 100%;
+	min-height: 64px;
+	overflow-wrap: anywhere;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	padding: 8px 12px;
+	border: 1.5px solid var(--primary-container);
+	border-radius: var(--radius);
+	background: var(--surface-lowest);
+	color: var(--primary-container);
+	cursor: pointer;
+	text-align: left;
+}
+.slot:hover:not(:disabled) {
+	background: var(--surface-low);
+}
+.slot:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.slot-time {
+	font-size: 1.25rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+.slot-office {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+	line-height: 1.3;
+}
+.slot.suggested {
+	background: var(--ida-fill);
+	border-width: 2.5px;
+}
+.slot-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	font-size: 0.6875rem;
+	font-weight: 700;
+	color: #6b4e00;
+}
+.slot-badge .material-symbols-outlined {
+	font-size: 13px;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+/* "Meine Termine" page                                                                         */
+/* ------------------------------------------------------------------------------------------- */
+
+.header-nav a[aria-current="page"] {
+	color: var(--primary);
+	background: var(--surface-container);
+	font-weight: 600;
+}
+.appt-page {
+	max-width: 1040px;
+	margin: 0 auto;
+	padding: 32px 24px 64px;
+}
+.appt-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 16px;
+	flex-wrap: wrap;
+	margin-bottom: 24px;
+}
+.appt-head h1 {
+	margin: 0 0 4px;
+	font-size: 2rem;
+	color: var(--primary);
+}
+.appt-page h2 {
+	font-size: 1.25rem;
+	margin: 28px 0 12px;
+}
+.appt-empty {
+	background: var(--surface-lowest);
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--radius-lg);
+	padding: 20px;
+}
+.appt-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.appt-card {
+	display: flex;
+	gap: 20px;
+	background: var(--surface-lowest);
+	border: 1px solid var(--border-default);
+	border-top: 3px solid var(--primary-container);
+	border-radius: var(--radius-lg);
+	padding: 18px 20px;
+}
+.appt-card.muted-card {
+	border-top-color: var(--border-strong);
+}
+.appt-date {
+	display: flex;
+	flex-direction: column;
+	min-width: 150px;
+	padding-right: 20px;
+	border-right: 1px solid var(--border-default);
+}
+.appt-day {
+	font-weight: 600;
+	text-transform: capitalize;
+}
+.appt-time {
+	font-size: 2rem;
+	font-weight: 700;
+	color: var(--primary);
+	font-variant-numeric: tabular-nums;
+}
+.appt-body {
+	flex: 1;
+	min-width: 0;
+}
+.appt-body h3 {
+	margin: 0 0 4px;
+	font-size: 1.125rem;
+}
+.appt-body p {
+	margin: 2px 0;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.appt-body .material-symbols-outlined {
+	font-size: 18px;
+}
+.appt-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 10px;
+}
+.appt-new {
+	background: var(--surface-lowest);
+	border: 1px solid var(--border-default);
+	border-radius: var(--radius-lg);
+	padding: 4px 20px 20px;
+	margin-top: 28px;
+}
+.appt-service {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 16px;
+	font-weight: 600;
+}
+.appt-service .lang-select {
+	max-width: 100%;
+	min-height: 44px;
+}
+.appt-history summary {
+	cursor: pointer;
+}
+.appt-history summary h2 {
+	display: inline;
+}
+@media (max-width: 600px) {
+	.appt-card {
+		flex-direction: column;
+		gap: 8px;
+	}
+	.appt-date {
+		border-right: none;
+		padding-right: 0;
+		flex-direction: row;
+		align-items: baseline;
+		gap: 12px;
+	}
+	.appt-page {
+		padding: 20px 16px 48px;
+	}
+}
+
+/* ------------------------------------------------------------------------------------------- */
 /* Animations (respect reduced motion)                                                          */
 /* ------------------------------------------------------------------------------------------- */
 
@@ -1846,4 +2121,8 @@ textarea.pf-input {
 	.pf.ida-filled .pf-options {
 		background: #fff;
 	}
+}
+
+.workspace[hidden] {
+	display: none;
 }

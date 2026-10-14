@@ -112,6 +112,19 @@ export type AppointmentSlot = {
 	citizenId: string | null;
 };
 
+export type Booking = {
+	id: string;
+	citizenId: string;
+	slotId: string;
+	serviceId: string;
+	office: string;
+	/** Local Vienna time, e.g. "2026-10-20T09:30". */
+	slotTime: string;
+	referenceNumber: string;
+	status: "booked" | "cancelled";
+	createdAt: string;
+};
+
 export type Handoff = {
 	id: string;
 	citizenId: string | null;

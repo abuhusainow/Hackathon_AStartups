@@ -54,10 +54,28 @@ export function base64ToBytes(b64: string): Uint8Array {
 	return out;
 }
 
+/**
+ * Every microphone stream we open is registered here, so it can always be released –
+ * even if a session is ended while the microphone is still starting (race conditions).
+ */
+const activeStreams = new Set<MediaStream>();
+
+function stopStream(stream: MediaStream) {
+	stream.getTracks().forEach((t) => t.stop());
+	activeStreams.delete(stream);
+}
+
+/** Safety net: stop every microphone stream IDA opened (called when voice or dictation ends). */
+export function releaseAllMicrophones() {
+	for (const s of [...activeStreams]) stopStream(s);
+}
+
 export class MicCapture {
 	private ctx: AudioContext | null = null;
 	private stream: MediaStream | null = null;
 	private node: AudioWorkletNode | null = null;
+	/** Set by stop(); start() checks it after every await, so a late-arriving stream is closed at once. */
+	private stopped = false;
 	muted = false;
 
 	constructor(
@@ -66,17 +84,21 @@ export class MicCapture {
 	) {}
 
 	async start() {
-		this.stream = await navigator.mediaDevices.getUserMedia({
+		const stream = await navigator.mediaDevices.getUserMedia({
 			audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 		});
+		activeStreams.add(stream);
+		if (this.stopped) return stopStream(stream);
+		this.stream = stream;
 		this.ctx = new AudioContext();
 		const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
 		await this.ctx.audioWorklet.addModule(url);
 		URL.revokeObjectURL(url);
-		const source = this.ctx.createMediaStreamSource(this.stream);
+		if (this.stopped) return this.stop();
+		const source = this.ctx.createMediaStreamSource(stream);
 		this.node = new AudioWorkletNode(this.ctx, "pcm-capture");
 		this.node.port.onmessage = (e: MessageEvent<{ pcm: ArrayBuffer; level: number }>) => {
-			if (this.muted) return this.onLevel(0);
+			if (this.muted || this.stopped) return this.onLevel(0);
 			this.onLevel(e.data.level);
 			this.onChunk(bytesToBase64(e.data.pcm));
 		};
@@ -84,13 +106,43 @@ export class MicCapture {
 	}
 
 	stop() {
+		this.stopped = true;
+		this.node?.port.close();
 		this.node?.disconnect();
-		this.stream?.getTracks().forEach((t) => t.stop());
+		if (this.stream) stopStream(this.stream);
 		this.ctx?.close().catch(() => {});
 		this.node = null;
 		this.stream = null;
 		this.ctx = null;
 	}
+}
+
+/** Records a short clip with MediaRecorder (dictation fallback when the Live API is unavailable). */
+export async function recordClip(): Promise<{ stop: () => Promise<Blob>; cancel: () => void }> {
+	const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+	activeStreams.add(stream);
+	const rec = new MediaRecorder(stream);
+	const chunks: Blob[] = [];
+	rec.ondataavailable = (e) => chunks.push(e.data);
+	rec.start();
+	return {
+		stop: () =>
+			new Promise<Blob>((resolve) => {
+				rec.onstop = () => {
+					stopStream(stream);
+					resolve(new Blob(chunks, { type: rec.mimeType }));
+				};
+				if (rec.state === "recording") rec.stop();
+				else {
+					stopStream(stream);
+					resolve(new Blob(chunks, { type: rec.mimeType }));
+				}
+			}),
+		cancel: () => {
+			if (rec.state === "recording") rec.stop();
+			stopStream(stream);
+		},
+	};
 }
 
 export class PcmPlayer {

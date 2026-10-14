@@ -211,4 +211,32 @@ describe("session-scoped API", () => {
 		});
 		expect(res.status).toBe(400);
 	});
+
+	it("books, lists and cancels an appointment (slot becomes free again)", async () => {
+		const cookie = await login("josef-gruber");
+		const headers = { cookie, "content-type": "application/json" };
+		const slots = (await (await SELF.fetch("https://example.com/api/appointments/slots?serviceId=passport-renewal", { headers })).json()) as any;
+		const slot = slots.slots[0];
+		const booked = (await (await SELF.fetch(`https://example.com/api/appointments/${slot.id}/book`, { method: "POST", headers })).json()) as any;
+		expect(booked.referenceNumber).toMatch(/^TERMIN-/);
+
+		const mine = (await (await SELF.fetch("https://example.com/api/appointments", { headers })).json()) as any;
+		expect(mine.upcoming.map((a: any) => a.bookingId)).toContain(booked.bookingId);
+
+		const cancel = await SELF.fetch(`https://example.com/api/appointments/${booked.bookingId}/cancel`, { method: "POST", headers });
+		expect(cancel.status).toBe(200);
+		const after = (await (await SELF.fetch("https://example.com/api/appointments", { headers })).json()) as any;
+		expect(after.upcoming.map((a: any) => a.bookingId)).not.toContain(booked.bookingId);
+		const free = (await (await SELF.fetch("https://example.com/api/appointments/slots?serviceId=passport-renewal", { headers })).json()) as any;
+		expect(free.slots.map((s: any) => s.id)).toContain(slot.id);
+	});
+
+	it("cannot cancel another citizen's appointment", async () => {
+		const josef = await login("josef-gruber");
+		const slots = (await (await SELF.fetch("https://example.com/api/appointments/slots?serviceId=passport-renewal", { headers: { cookie: josef } })).json()) as any;
+		const booked = (await (await SELF.fetch(`https://example.com/api/appointments/${slots.slots[1].id}/book`, { method: "POST", headers: { cookie: josef } })).json()) as any;
+		const lena = await login("lena-huber");
+		const res = await SELF.fetch(`https://example.com/api/appointments/${booked.bookingId}/cancel`, { method: "POST", headers: { cookie: lena } });
+		expect(res.status).toBe(404);
+	});
 });

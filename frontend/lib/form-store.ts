@@ -6,7 +6,8 @@
 import { useSyncExternalStore } from "react";
 import { allFields, getForm, isoToAt, missingRequired, type FormDefinition, type FormFieldDef } from "../../src/shared/forms";
 import type { AssistantSettings, FormState } from "../../src/shared/types";
-import { api, type BookingResult, type Profile, type SubmissionResult } from "../api";
+import { api, type BookingResult, type Profile, type Slot, type SubmissionResult } from "../api";
+import { panelStore } from "./panel-store";
 
 export type AutoFillSource = "register" | "ida";
 
@@ -54,6 +55,7 @@ export const formStore = {
 	},
 	reset() {
 		formStore.set(INITIAL);
+		if (panelStore.get().active === "form") panelStore.set({ active: null });
 	},
 };
 
@@ -206,7 +208,43 @@ export function openForm(formId: string, profile: Profile | null) {
 		hint: null,
 		revealTick: s.revealTick + 1,
 	}));
+	panelStore.set((p) => ({ active: "form", revealTick: p.revealTick + 1 }));
 	return { form, prefill };
+}
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+/** Slots matching the citizen's wish (date, weekday, morning/afternoon) – computed here, not guessed by the AI. */
+export function matchingSlots(slots: Slot[], wish: { preferredDate?: unknown; preferredWeekday?: unknown; timeOfDay?: unknown }): Slot[] {
+	if (!wish.preferredDate && !wish.preferredWeekday && !wish.timeOfDay) return [];
+	const matches = slots.filter((s) => {
+		const [date, time] = s.slotTime.split("T");
+		const [y, m, d] = date.split("-").map(Number);
+		const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
+		const hour = Number(time.slice(0, 2));
+		if (typeof wish.preferredDate === "string" && wish.preferredDate && date !== wish.preferredDate) return false;
+		if (typeof wish.preferredWeekday === "string" && wish.preferredWeekday && weekday !== wish.preferredWeekday) return false;
+		if (wish.timeOfDay === "morning" && hour >= 12) return false;
+		if (wish.timeOfDay === "afternoon" && hour < 12) return false;
+		return true;
+	});
+	// Only the first matching day, so the suggestion stays clear.
+	const firstDay = matches[0]?.slotTime.slice(0, 10);
+	return matches.filter((s) => s.slotTime.startsWith(firstDay ?? "-"));
+}
+
+/** Confirm dialog → booking → success card in the panel. Used by the AI tool and by a tap on a slot. */
+export async function bookSlot(deps: Pick<ClientToolDeps, "confirmBooking" | "onSubmitted">, slotId: string, slotLabel: string, lang: string) {
+	const confirmed = await deps.confirmBooking({ slotId, slotLabel });
+	if (!confirmed) return { booked: false, reason: "The citizen did not confirm." };
+	try {
+		const result = await api.bookAppointment(slotId, lang);
+		panelStore.set((p) => ({ booked: result, slots: p.slots.filter((s) => s.id !== slotId), highlight: [] }));
+		deps.onSubmitted?.(result);
+		return { booked: true, ...result };
+	} catch (err) {
+		return { booked: false, error: (err as Error).message };
+	}
 }
 
 export function createClientToolExecutor(deps: ClientToolDeps) {
@@ -265,6 +303,7 @@ export function createClientToolExecutor(deps: ClientToolDeps) {
 				if (!form) return { error: "No form is open." };
 				const fieldId = String(input.fieldId);
 				if (!allFields(form).some((f) => f.id === fieldId)) return { error: `Unknown field ${fieldId}` };
+				panelStore.set((p) => ({ active: "form", revealTick: p.revealTick + 1 }));
 				formStore.set((s) => ({
 					highlight: fieldId,
 					hint: input.hint ? { fieldId, text: String(input.hint) } : null,
@@ -316,16 +355,31 @@ export function createClientToolExecutor(deps: ClientToolDeps) {
 					return { submitted: false, error: (err as Error).message };
 				}
 			}
-			case "request_appointment_booking": {
-				const confirmed = await deps.confirmBooking({ slotId: String(input.slotId), slotLabel: String(input.slotLabel ?? input.slotId) });
-				if (!confirmed) return { booked: false, reason: "The citizen did not confirm." };
+			case "show_appointment_slots": {
+				const serviceId = String(input.serviceId);
+				panelStore.set((p) => ({ active: "appointments", serviceId, loading: true, booked: null, highlight: [], revealTick: p.revealTick + 1 }));
 				try {
-					const result = await api.bookAppointment(String(input.slotId), lang());
-					deps.onSubmitted?.(result);
-					return { booked: true, ...result };
+					const { slots } = await api.appointmentSlots(serviceId);
+					const highlight = Array.isArray(input.highlightSlotIds) && input.highlightSlotIds.length ? input.highlightSlotIds.map(String) : matchingSlots(slots, input).map((s) => s.id);
+					panelStore.set({ slots, highlight, loading: false });
+					return {
+						shown: true,
+						serviceId,
+						highlighted: highlight,
+						slots: slots.map((s) => ({ slotId: s.id, time: s.slotTime, office: s.office })),
+						note: highlight.length
+							? "The slots matching the citizen's wish are highlighted. Mention 2–3 of them; the citizen taps one or tells you."
+							: "The citizen sees these slots as buttons on the right and can tap one. Mention only 2–3 options.",
+					};
 				} catch (err) {
-					return { booked: false, error: (err as Error).message };
+					panelStore.set({ loading: false });
+					return { error: (err as Error).message };
 				}
+			}
+			case "request_appointment_booking": {
+				const slotId = String(input.slotId);
+				panelStore.set((p) => ({ highlight: [slotId], active: p.serviceId ? "appointments" : p.active }));
+				return bookSlot(deps, slotId, String(input.slotLabel ?? slotId), lang());
 			}
 			case "close_form": {
 				formStore.reset();

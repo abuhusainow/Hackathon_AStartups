@@ -89,7 +89,8 @@ pnpm dev
 2. Startseite mit IDA → Chip **„Familienbeihilfe“** klicken oder schreiben/sprechen.
 3. Rechts öffnet sich das Formular, vorausgefüllt aus den Registerdaten.
 4. „Übersetzen“ (oder: *„Bitte übersetze das Formular auf Ukrainisch“*) → die Übersetzungsebene liegt über dem Original, die Felder bleiben ausfüllbar.
-5. Mikrofon-Button (rund) = **Live-Sprachdialog** mit Gemini Live · Tastatur-Mikrofon = **Diktierfenster**.
+5. Mikrofon-Button (rund) = **Live-Sprachdialog** mit Gemini Live · Mikrofon in der Eingabezeile = **Diktieren direkt ins Feld** (nochmals klicken = Stopp).
+6. *„Ich brauche einen Termin für den Reisepass, am Montag in der Früh“* → freie Termine erscheinen rechts, passende sind markiert. Gebuchte Termine: Menü **„Meine Termine“**.
 
 > **Mikrofon:** Browser erlauben Mikrofonzugriff nur über `https://` oder `http://localhost`.
 > Testen Sie Sprache daher lokal über `localhost` oder auf der deployten `https://…workers.dev`-Adresse.
@@ -194,4 +195,5 @@ Alle Modell-IDs sind Variablen in `wrangler.jsonc` → ohne Code-Änderung austa
 3. *„Перекладіть, будь ласка, форму українською“* → Übersetzungsebene über dem Original; „Gedrückt halten“ zeigt das deutsche Original.
 4. Live-Sprachdialog starten → IDA fragt fehlende Felder ab und füllt sie live; Untertitel laufen mit.
 5. „Prüfen und absenden“ → Bestätigungsdialog (ID-Austria-Signatur simuliert) → Referenznummer.
-6. Profil → *„Was IDA über mich weiß“* → Gedächtnis-Einträge (Sprache, Barrieren) – transparent und löschbar.
+6. Login als **Josef Gruber** → *„I brauch an Termin für mein Pass, am Montag in da Fruah“* → Terminauswahl rechts, Vorschläge markiert → Klick → Bestätigen → Karte mit Referenznummer; danach „Meine Termine“ zeigen (.ics, Stornieren).
+7. Profil → *„Was IDA über mich weiß“* → Gedächtnis-Einträge (Sprache, Barrieren) – transparent und löschbar.

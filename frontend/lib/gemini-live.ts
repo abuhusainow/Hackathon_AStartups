@@ -12,8 +12,10 @@ export type FunctionCall = { id: string; name: string; args: Record<string, unkn
 
 export type LiveEvents = {
 	onStatus?: (status: LiveStatus) => void;
-	/** Partial transcription of what the citizen says. */
+	/** Partial transcription of what the citizen says (delta, final for this part). */
 	onInputTranscript?: (text: string) => void;
+	/** Running (not yet final) transcription of the current utterance – replaces the previous one. */
+	onInterimTranscript?: (text: string) => void;
 	/** Partial transcription of what IDA says. */
 	onOutputTranscript?: (text: string) => void;
 	onModelText?: (text: string) => void;
@@ -44,6 +46,11 @@ export class GeminiLiveSession {
 		if (this.status === s) return;
 		this.status = s;
 		this.events.onStatus?.(s);
+	}
+
+	/** True when stop() was called (by the citizen) – used to suppress retries. */
+	get ended(): boolean {
+		return this.closed;
 	}
 
 	async start() {
@@ -80,6 +87,8 @@ export class GeminiLiveSession {
 			};
 		});
 
+		// The session may have been ended while connecting – never open the microphone then.
+		if (this.closed) throw new Error("Session ended");
 		this.mic = new MicCapture(
 			(pcm) => this.send({ realtimeInput: { audio: { data: pcm, mimeType: "audio/pcm;rate=16000" } } }),
 			(level) => {
@@ -87,6 +96,10 @@ export class GeminiLiveSession {
 			},
 		);
 		await this.mic.start();
+		if (this.closed) {
+			this.mic.stop();
+			throw new Error("Session ended");
+		}
 		this.setStatus("listening");
 		if (this.player) {
 			this.levelTimer = window.setInterval(() => {
@@ -105,6 +118,7 @@ export class GeminiLiveSession {
 				this.player?.interrupt();
 				this.events.onInterrupted?.();
 			}
+			if (sc.interimInputTranscription?.text) this.events.onInterimTranscript?.(sc.interimInputTranscription.text);
 			if (sc.inputTranscription?.text) this.events.onInputTranscript?.(sc.inputTranscription.text);
 			if (sc.outputTranscription?.text) this.events.onOutputTranscript?.(sc.outputTranscription.text);
 			for (const part of sc.modelTurn?.parts ?? []) {
@@ -151,6 +165,8 @@ export class GeminiLiveSession {
 	}
 
 	stop() {
+		// Release the microphone first (synchronously), then close the connection.
+		this.mic?.stop();
 		try {
 			this.send({ realtimeInput: { audioStreamEnd: true } });
 			this.ws?.close(1000, "user ended");

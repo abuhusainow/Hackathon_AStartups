@@ -13,7 +13,11 @@
  *   GET/DELETE /api/memory · DELETE /api/memory/:id · POST /api/memory/ingest {transcript}
  *   POST /api/forms/:formId/draft      create / update the application draft ({values})
  *   POST /api/forms/:formId/submit     submit after the citizen confirmed ({values})
- *   POST /api/appointments/:slotId/book   after the citizen confirmed
+ *   GET  /api/appointments             the citizen's appointments ("Meine Termine")
+ *   GET  /api/appointments/services    services that need an appointment
+ *   GET  /api/appointments/slots       free slots (?serviceId=)
+ *   POST /api/appointments/:slotId/book       after the citizen confirmed
+ *   POST /api/appointments/:bookingId/cancel  after the citizen confirmed
  */
 import { Hono, type Context } from "hono";
 import { z } from "zod";
@@ -222,6 +226,21 @@ appApi.post("/forms/:formId/submit", async (c) => {
 	const draft = await gov.startApplication(c.env, c.var.session.pid, form.serviceId, form.toServiceData(body.values), lang);
 	return c.json(await gov.submitApplication(c.env, draft.applicationId, lang));
 });
+
+// ---------------------------------------------------------------------------------------------
+// Appointments ("Meine Termine" + visual slot picker)
+// ---------------------------------------------------------------------------------------------
+
+appApi.get("/appointments", async (c) => c.json(await gov.listMyAppointments(c.env, c.var.session.pid, govLang(c.req.query("lang")))));
+
+appApi.get("/appointments/services", (c) => c.json(gov.appointmentServices(govLang(c.req.query("lang")))));
+
+appApi.get("/appointments/slots", async (c) => {
+	const serviceId = c.req.query("serviceId") ?? "passport-renewal";
+	return c.json(await gov.getAppointmentSlots(c.env, serviceId, Math.min(40, Number(c.req.query("limit")) || 24)));
+});
+
+appApi.post("/appointments/:bookingId/cancel", async (c) => c.json(await gov.cancelAppointment(c.env, c.var.session.pid, c.req.param("bookingId"))));
 
 appApi.post("/appointments/:slotId/book", async (c) => {
 	const lang = govLang(c.req.query("lang"));

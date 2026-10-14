@@ -77,11 +77,11 @@ export const TOOL_SPECS: Record<string, ToolSpec> = {
 		input: z.object({ serviceId }),
 		execute: async ({ serviceId }, ctx) => gov.checkEligibility(ctx.env, ctx.citizenId, serviceId),
 	}),
-	get_appointment_slots: spec({
+	get_my_appointments: spec({
 		side: "server",
-		description: "Free appointment slots for services that need a personal appointment (passport).",
-		input: z.object({ serviceId }),
-		execute: async ({ serviceId }, ctx) => gov.getAppointmentSlots(ctx.env, serviceId),
+		description: "The citizen's booked appointments (upcoming and past), e.g. for 'When is my appointment?'.",
+		input: z.object({}),
+		execute: async (_i, ctx) => gov.listMyAppointments(ctx.env, ctx.citizenId, govLang(ctx.settings.language)),
 	}),
 	create_handoff: spec({
 		side: "server",
@@ -176,9 +176,22 @@ export const TOOL_SPECS: Record<string, ToolSpec> = {
 			"When the form is complete: show the citizen a summary and ask them to confirm the binding submission (signed with ID Austria). Waits for the citizen's decision and returns the reference number or why it was not submitted.",
 		input: z.object({}),
 	}),
+	show_appointment_slots: spec({
+		side: "client",
+		description:
+			"Show the free appointment slots of a service VISUALLY in the panel on the right (days and times as buttons). Always use this instead of reading out a list. The citizen can click a slot themselves. Returns the shown slots (ids, times, offices). Optionally highlight slots that match the citizen's wishes.",
+		input: z.object({
+			serviceId,
+			preferredDate: z.string().optional().describe("Wished date YYYY-MM-DD, if the citizen named one"),
+			preferredWeekday: z.enum(["monday", "tuesday", "wednesday", "thursday", "friday"]).optional().describe("Wished weekday, e.g. 'Montag' → monday"),
+			timeOfDay: z.enum(["morning", "afternoon"]).optional().describe("morning = before 12:00, afternoon = from 12:00"),
+			highlightSlotIds: z.array(z.string()).optional().describe("Explicit slot ids to highlight (from an earlier call)"),
+		}),
+	}),
 	request_appointment_booking: spec({
 		side: "client",
-		description: "Ask the citizen to confirm booking an appointment slot (from get_appointment_slots). Waits for the decision.",
+		description:
+			"When the citizen chose a slot by voice or text: highlight it in the panel and ask the citizen to confirm the booking. Waits for the decision and returns the reference number.",
 		input: z.object({ slotId: z.string(), slotLabel: z.string().describe("Human readable time and office") }),
 	}),
 	close_form: spec({
@@ -198,8 +211,10 @@ export const EVAL_STUBBED_TOOLS = Object.entries(TOOL_SPECS)
 	.map(([n]) => n);
 
 /** Stub results for client tools in eval mode (there is no browser). */
-function evalClientStub(name: string, input: Record<string, unknown>): unknown {
+async function evalClientStub(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
 	switch (name) {
+		case "show_appointment_slots":
+			return { shown: true, ...(await gov.getAppointmentSlots(ctx.env, String(input.serviceId))) };
 		case "open_form":
 			return { opened: true, formId: input.formId, note: "Eval mode: form opened (simulated), pre-filled from the profile." };
 		case "request_submission":
@@ -217,7 +232,7 @@ export function buildTools(ctx: ToolContext): ToolSet {
 		if (s.side === "client") {
 			tools[name] =
 				ctx.mode === "eval"
-					? tool({ description: s.description, inputSchema: s.input, execute: async (i) => evalClientStub(name, i as Record<string, unknown>) })
+					? tool({ description: s.description, inputSchema: s.input, execute: async (i) => evalClientStub(name, i as Record<string, unknown>, ctx) })
 					: tool({ description: s.description, inputSchema: s.input }); // no execute → handled by the browser
 			continue;
 		}

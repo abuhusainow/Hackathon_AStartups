@@ -6,7 +6,7 @@
  * Reset anytime with: POST /api/gov/admin/reset
  */
 import { PERSONAS } from "./data/personas";
-import type { Application, AppointmentSlot, Citizen, CitizenDocument, Handoff } from "./types";
+import type { Application, AppointmentSlot, Booking, Citizen, CitizenDocument, Handoff } from "./types";
 
 const SCHEMA = [
 	`CREATE TABLE IF NOT EXISTS citizens (
@@ -50,6 +50,18 @@ const SCHEMA = [
 		slot_time TEXT NOT NULL,
 		citizen_id TEXT
 	)`,
+	// Booked appointments of citizens ("Meine Termine"). Created with IF NOT EXISTS, so existing databases get it too.
+	`CREATE TABLE IF NOT EXISTS bookings (
+		id TEXT PRIMARY KEY,
+		citizen_id TEXT NOT NULL,
+		slot_id TEXT NOT NULL,
+		service_id TEXT NOT NULL,
+		office TEXT NOT NULL,
+		slot_time TEXT NOT NULL,
+		reference_number TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'booked',
+		created_at TEXT NOT NULL
+	)`,
 	`CREATE TABLE IF NOT EXISTS handoffs (
 		id TEXT PRIMARY KEY,
 		citizen_id TEXT,
@@ -61,7 +73,7 @@ const SCHEMA = [
 	)`,
 ];
 
-const TABLES = ["citizens", "documents", "applications", "appointments", "handoffs"];
+const TABLES = ["citizens", "documents", "applications", "appointments", "bookings", "handoffs"];
 
 const OFFICES = ["Passbehörde Wien – Bezirksamt Mitte (Mock)", "Bezirkshauptmannschaft Linz-Land (Mock)"];
 
@@ -190,6 +202,32 @@ type ApplicationRow = {
 };
 
 type AppointmentRow = { id: string; office: string; service_id: string; slot_time: string; citizen_id: string | null };
+
+type BookingRow = {
+	id: string;
+	citizen_id: string;
+	slot_id: string;
+	service_id: string;
+	office: string;
+	slot_time: string;
+	reference_number: string;
+	status: string;
+	created_at: string;
+};
+
+function toBooking(r: BookingRow): Booking {
+	return {
+		id: r.id,
+		citizenId: r.citizen_id,
+		slotId: r.slot_id,
+		serviceId: r.service_id,
+		office: r.office,
+		slotTime: r.slot_time,
+		referenceNumber: r.reference_number,
+		status: r.status === "cancelled" ? "cancelled" : "booked",
+		createdAt: r.created_at,
+	};
+}
 
 type HandoffRow = {
 	id: string;
@@ -332,6 +370,33 @@ export async function dbGetSlot(db: D1Database, id: string): Promise<Appointment
 export async function dbBookSlot(db: D1Database, id: string, citizenId: string): Promise<boolean> {
 	const res = await db.prepare("UPDATE appointments SET citizen_id = ? WHERE id = ? AND citizen_id IS NULL").bind(citizenId, id).run();
 	return (res.meta.changes ?? 0) > 0;
+}
+
+export async function dbInsertBooking(db: D1Database, b: Booking): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO bookings (id, citizen_id, slot_id, service_id, office, slot_time, reference_number, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		)
+		.bind(b.id, b.citizenId, b.slotId, b.serviceId, b.office, b.slotTime, b.referenceNumber, b.status, b.createdAt)
+		.run();
+}
+
+export async function dbListBookings(db: D1Database, citizenId: string): Promise<Booking[]> {
+	const { results } = await db.prepare("SELECT * FROM bookings WHERE citizen_id = ? ORDER BY slot_time").bind(citizenId).all<BookingRow>();
+	return results.map(toBooking);
+}
+
+export async function dbGetBooking(db: D1Database, id: string): Promise<Booking | null> {
+	const row = await db.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first<BookingRow>();
+	return row ? toBooking(row) : null;
+}
+
+/** Cancels a booking and frees its slot again. */
+export async function dbCancelBooking(db: D1Database, booking: Booking): Promise<void> {
+	await db.batch([
+		db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").bind(booking.id),
+		db.prepare("UPDATE appointments SET citizen_id = NULL WHERE id = ? AND citizen_id = ?").bind(booking.slotId, booking.citizenId),
+	]);
 }
 
 export async function dbInsertHandoff(db: D1Database, h: Handoff): Promise<void> {

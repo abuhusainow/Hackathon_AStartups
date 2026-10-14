@@ -2,8 +2,9 @@
  * The citizen portal after the ID Austria login:
  *   - text chat with IDA (Agents SDK WebSocket, Gemini)
  *   - Gemini Live voice-to-voice dialog with live captions
- *   - dictation window (chat input or any form field)
- *   - the interactive form panel on the right, resizable split view (tabs on mobile)
+ *   - inline dictation (directly into the chat input or any form field)
+ *   - the panel on the right (form or appointment selection), resizable split view (tabs on mobile)
+ *   - the "Meine Termine" page (/termine)
  *   - accessibility settings that are synced to the agent and remembered
  */
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -14,17 +15,27 @@ import { getForm } from "../../src/shared/forms";
 import { languageDir } from "../../src/shared/languages";
 import { isServerTool } from "../../src/shared/tool-names";
 import { DEFAULT_SETTINGS, type AssistantSettings } from "../../src/shared/types";
-import { api, type Me } from "../api";
-import { ConfirmBookingDialog, ConfirmSubmissionDialog, DictationDialog } from "../components/Dialogs";
+import { api, type BookingResult, type Me, type Slot, type SubmissionResult } from "../api";
+import { AppointmentPanel } from "../components/AppointmentPanel";
+import { ConfirmActionDialog, ConfirmSubmissionDialog } from "../components/Dialogs";
 import { FormPanel } from "../components/FormPanel";
 import { Header } from "../components/Header";
-import { MessageList, type VoiceTurn } from "../components/Messages";
+import { isCardResult, MessageList, type ResultLike, type VoiceTurn } from "../components/Messages";
 import { useUi } from "../i18n";
+import { releaseAllMicrophones } from "../lib/audio";
+import { formatTime, slotLabel } from "../lib/datetime";
 import { GeminiLiveSession, type LiveStatus } from "../lib/gemini-live";
-import { createClientToolExecutor, formStateSnapshot, formStore, setFieldByCitizen, useFormStore } from "../lib/form-store";
+import { bookSlot, createClientToolExecutor, formStateSnapshot, formStore, setFieldByCitizen, useFormStore } from "../lib/form-store";
+import { panelStore, usePanelStore } from "../lib/panel-store";
+import { useDictation } from "../lib/use-dictation";
+import { Appointments } from "./Appointments";
 
-type Confirm = { kind: "submit" } | { kind: "book"; slotLabel: string };
-type DictationTarget = { kind: "chat" } | { kind: "field"; fieldId: string; label: string };
+type Confirm = { kind: "submit" } | { kind: "book"; slotLabel: string } | { kind: "cancel"; label: string };
+type View = "assistant" | "appointments";
+
+function viewFromPath(): View {
+	return window.location.pathname.startsWith("/termine") ? "appointments" : "assistant";
+}
 
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
@@ -37,11 +48,13 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	const [readAloud, setReadAloud] = useState(() => !!me.profile.accessibility.vision || me.memory.some((m) => m.key === "read_aloud" && m.value === "true"));
 	const { t } = useUi(settings.language);
 	const form = useFormStore();
+	const panel = usePanelStore();
+	const [view, setView] = useState<View>(viewFromPath);
+	const [appointmentsKey, setAppointmentsKey] = useState(0);
 	const [input, setInput] = useState("");
 	const [attachment, setAttachment] = useState<{ name: string; mediaType: string; url: string } | null>(null);
 	const [confirm, setConfirm] = useState<Confirm | null>(null);
 	const confirmResolver = useRef<((v: boolean) => void) | null>(null);
-	const [dictation, setDictation] = useState<DictationTarget | null>(null);
 	const [toast, setToast] = useState<string | null>(null);
 	const [chatWidth, setChatWidth] = useState(() => Number(localStorage.getItem("ida-chat-width")) || 40);
 	const [tab, setTab] = useState<"chat" | "form">("chat");
@@ -49,6 +62,8 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	const [voiceTurns, setVoiceTurns] = useState<VoiceTurn[]>([]);
 	const [memoryVersion, setMemoryVersion] = useState(0);
 	const liveRef = useRef<GeminiLiveSession | null>(null);
+	/** Set when the citizen ends the voice dialog – no automatic retry, microphone released. */
+	const liveEndedByUser = useRef(false);
 	const voiceTurnsRef = useRef<VoiceTurn[]>([]);
 	const workspaceRef = useRef<HTMLDivElement>(null);
 	const messagesRef = useRef<HTMLDivElement>(null);
@@ -117,6 +132,7 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 				confirmSubmission: () => askConfirm({ kind: "submit" }),
 				confirmBooking: (slot) => askConfirm({ kind: "book", slotLabel: slot.slotLabel }),
 				notify: showToast,
+				onSubmitted: () => setAppointmentsKey((k) => k + 1),
 			}),
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[me.profile],
@@ -140,6 +156,15 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	useEffect(() => {
 		messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
 	}, [messages, voiceTurns]);
+
+	// The input grows with its text (typed or dictated), up to the max-height in CSS.
+	useEffect(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		el.style.height = "auto";
+		el.style.height = `${el.scrollHeight}px`;
+		if (dictation.target?.kind === "chat") el.scrollTop = el.scrollHeight;
+	}, [input]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Read answers aloud (accessibility setting / memory) when a text answer is complete.
 	const spokenRef = useRef<string | null>(null);
@@ -165,6 +190,7 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	}, [status, messages.length]);
 
 	function send(text: string) {
+		if (dictation.active) void dictation.stop();
 		const trimmed = text.trim();
 		if (!trimmed && !attachment) return;
 		if (liveRef.current) {
@@ -209,6 +235,9 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 
 	async function startLive(attempt = 0): Promise<void> {
 		if (liveRef.current) return;
+		if (attempt === 0) liveEndedByUser.current = false;
+		if (liveEndedByUser.current) return;
+		await dictation.stop(); // only one microphone user at a time
 		window.speechSynthesis?.cancel();
 		setLiveStatus("connecting");
 		try {
@@ -227,6 +256,9 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 								const response = isServerTool(c.name)
 									? await api.serverTool(c.name, c.args, settingsRef.current).catch((e) => ({ error: (e as Error).message }))
 									: { result: await runClientTool(c.name, c.args ?? {}) };
+								// Reference numbers etc. are shown as a card in the conversation, not only spoken.
+								const output = "result" in response ? response.result : response;
+								if (isCardResult(output)) addVoiceCard(output);
 								return { id: c.id, name: c.name, response };
 							}),
 						),
@@ -241,11 +273,21 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 			const micProblem = /denied|NotAllowed|NotFound/i.test(message);
 			liveRef.current?.stop();
 			liveRef.current = null;
+			releaseAllMicrophones();
+			// Ended by the citizen while connecting → done, no retry.
+			if (liveEndedByUser.current) {
+				setLiveStatus(null);
+				return;
+			}
 			// The voice model may be overloaded – try the fallback model once.
 			if (!micProblem && attempt === 0) return startLive(1);
 			showToast(micProblem ? t("micDenied") : `${t("liveError")} ${message}`);
 			setLiveStatus(null);
 		}
+	}
+
+	function addVoiceCard(card: ResultLike) {
+		setVoiceTurns((prev) => [...prev.map((v) => ({ ...v, final: true })), { role: "assistant", text: "", final: true, card }]);
 	}
 
 	function finishLive() {
@@ -254,28 +296,33 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 			return;
 		}
 		liveRef.current = null;
+		releaseAllMicrophones();
 		setLiveStatus(null);
 		document.documentElement.style.setProperty("--voice-level", "1");
-		const turns = voiceTurnsRef.current.filter((v) => v.text.trim());
+		const turns = voiceTurnsRef.current.filter((v) => v.text.trim() || v.card);
 		if (turns.length) {
 			// Keep the voice conversation in the chat history (the text agent sees it, too) …
 			const voiceMessages: UIMessage[] = turns.map((v) => ({
 				id: crypto.randomUUID(),
 				role: v.role,
-				metadata: { voice: true },
-				parts: [{ type: "text", text: v.text.trim() }],
+				metadata: { voice: true, ...(v.card ? { card: v.card } : {}) },
+				parts: [{ type: "text", text: v.text.trim() || (v.card?.referenceNumber ? `${t("reference")}: ${v.card.referenceNumber}` : "") }],
 			}));
 			setMessages((prev) => [...prev, ...voiceMessages]);
 			// … and let the decision model update the memory.
-			api.ingestTranscript(turns.map((v) => ({ role: v.role, text: v.text.trim() }))).then(() =>
-				window.setTimeout(() => setMemoryVersion((x) => x + 1), 5000),
-			);
+			const transcript = turns.filter((v) => v.text.trim()).map((v) => ({ role: v.role, text: v.text.trim() }));
+			if (transcript.length)
+				api.ingestTranscript(transcript).then(() => window.setTimeout(() => setMemoryVersion((x) => x + 1), 5000));
 		}
 		setVoiceTurns([]);
 	}
 
 	function stopLive() {
-		liveRef.current?.stop();
+		liveEndedByUser.current = true;
+		const session = liveRef.current;
+		if (session) session.stop();
+		else finishLive();
+		releaseAllMicrophones();
 	}
 
 	const [muted, setMuted] = useState(false);
@@ -283,17 +330,86 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 		if (liveRef.current) liveRef.current.muted = muted;
 	}, [muted]);
 
-	useEffect(() => () => liveRef.current?.stop(), []);
+	useEffect(
+		() => () => {
+			liveEndedByUser.current = true;
+			liveRef.current?.stop();
+			releaseAllMicrophones();
+		},
+		[],
+	);
+
+	// ---------------------------------------------------------------------------------------------
+	// Inline dictation (chat input or a form field)
+	// ---------------------------------------------------------------------------------------------
+
+	const getSettings = useCallback(() => settingsRef.current, []);
+	const dictation = useDictation(getSettings, (message) => showToast(/denied|NotAllowed/i.test(message) ? t("micDenied") : message));
+
+	/** Text that was already there + the dictated text (with a space in between). */
+	const join = (base: string, dictated: string) => (base && dictated && !/\s$/.test(base) ? `${base} ${dictated}` : base + dictated);
+
+	function toggleChatDictation() {
+		if (dictation.target?.kind === "chat") return void dictation.stop();
+		if (liveRef.current) return;
+		const base = input;
+		void dictation.start({ kind: "chat" }, (textSoFar) => setInput(join(base, textSoFar)));
+		inputRef.current?.focus();
+	}
+
+	function toggleFieldDictation(fieldId: string) {
+		if (dictation.target?.kind === "field" && dictation.target.fieldId === fieldId) return void dictation.stop();
+		if (liveRef.current) return;
+		const base = formStore.get().values[fieldId] ?? "";
+		void dictation.start({ kind: "field", fieldId }, (textSoFar) => setFieldByCitizen(fieldId, join(base, textSoFar), settingsRef.current.language));
+	}
+
+	// ---------------------------------------------------------------------------------------------
+	// Pages ("/" assistant, "/termine" my appointments)
+	// ---------------------------------------------------------------------------------------------
+
+	useEffect(() => {
+		const onPop = () => setView(viewFromPath());
+		window.addEventListener("popstate", onPop);
+		return () => window.removeEventListener("popstate", onPop);
+	}, []);
+
+	function navigate(next: View) {
+		const path = next === "appointments" ? "/termine" : "/";
+		if (window.location.pathname !== path) window.history.pushState({}, "", path);
+		setView(next);
+		window.scrollTo(0, 0);
+	}
+
+	/** The citizen tapped a free slot in the panel → confirm → book → tell IDA. */
+	async function pickSlot(slot: Slot) {
+		const label = slotLabel(slot, settingsRef.current.language);
+		const result = (await bookSlot(
+			{ confirmBooking: (s) => askConfirm({ kind: "book", slotLabel: s.slotLabel }), onSubmitted: () => setAppointmentsKey((k) => k + 1) },
+			slot.id,
+			label,
+			settingsRef.current.language,
+		)) as { booked: boolean; referenceNumber?: string; error?: string };
+		if (!result.booked) {
+			if (result.error) showToast(result.error);
+			return;
+		}
+		const info = t("apptBookedInfo", { target: `${label} (${t("reference")} ${result.referenceNumber})` });
+		if (liveRef.current) {
+			liveRef.current.sendText(info);
+			addVoiceCard({ ...(panelStore.get().booked as BookingResult), booked: true });
+		} else sendMessage({ text: info });
+	}
 
 	// ---------------------------------------------------------------------------------------------
 	// Form panel, split view
 	// ---------------------------------------------------------------------------------------------
 
-	const formOpen = !!form.formId;
+	const panelOpen = panel.active === "appointments" || (panel.active === "form" && !!form.formId);
 	useEffect(() => {
-		if (formOpen && window.matchMedia("(max-width: 900px)").matches) setTab("form");
-		if (!formOpen) setTab("chat");
-	}, [form.revealTick, formOpen]);
+		if (panelOpen && window.matchMedia("(max-width: 900px)").matches) setTab("form");
+		if (!panelOpen) setTab("chat");
+	}, [form.revealTick, panel.revealTick, panelOpen]);
 
 	useEffect(() => {
 		localStorage.setItem("ida-chat-width", String(chatWidth));
@@ -348,8 +464,9 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 				: liveStatus === "thinking"
 					? t("liveThinking")
 					: t("liveListening");
-	const lastCaption = voiceTurns[voiceTurns.length - 1];
-	const formTitle = form.formId ? getForm(form.formId)?.title : undefined;
+	const lastCaption = [...voiceTurns].reverse().find((v) => v.text.trim());
+	const chatDictating = dictation.target?.kind === "chat";
+	const formTitle = panel.active === "appointments" ? t("apptPanelTitle") : form.formId ? getForm(form.formId)?.title : undefined;
 
 	return (
 		<>
@@ -366,12 +483,32 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 				onNewChat={() => {
 					clearHistory();
 					formStore.reset();
+					panelStore.reset();
 					setVoiceTurns([]);
+					navigate("assistant");
 				}}
-				onLogout={onLogout}
+				onLogout={() => {
+					stopLive();
+					void dictation.stop();
+					onLogout();
+				}}
+				view={view}
+				onNavigate={navigate}
 			/>
 
-			{formOpen && (
+			{view === "appointments" && (
+				<Appointments
+					t={t}
+					lang={settings.language}
+					refreshKey={appointmentsKey}
+					onAskIda={() => navigate("assistant")}
+					confirmBooking={(slot) => askConfirm({ kind: "book", slotLabel: slot.slotLabel })}
+					confirmCancel={(label) => askConfirm({ kind: "cancel", label })}
+					notify={showToast}
+				/>
+			)}
+
+			{view === "assistant" && panelOpen && (
 				<div className="mobile-tabs" role="tablist">
 					<button type="button" role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
 						{t("tabChat")}
@@ -385,7 +522,8 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 
 			<div
 				ref={workspaceRef}
-				className={`workspace${formOpen ? " split" : ""}`}
+				hidden={view !== "assistant"}
+				className={`workspace${panelOpen ? " split" : ""}`}
 				data-tab={tab}
 				style={{ "--chat-width": `${chatWidth}%` } as React.CSSProperties}
 			>
@@ -488,7 +626,7 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 										attach_file
 									</span>
 									<span style={{ flex: 1 }}>{attachment.name}</span>
-									<button type="button" className="icon-btn" aria-label={t("dictCancel")} onClick={() => setAttachment(null)}>
+									<button type="button" className="icon-btn" aria-label={t("close")} onClick={() => setAttachment(null)}>
 										<span className="material-symbols-outlined" aria-hidden="true">
 											close
 										</span>
@@ -519,18 +657,29 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 									ref={inputRef}
 									rows={1}
 									value={input}
-									placeholder={t("inputPlaceholder")}
+									placeholder={chatDictating ? t("dictPlaceholder") : t("inputPlaceholder")}
+									className={chatDictating ? "dictating" : undefined}
 									onChange={(e) => setInput(e.target.value)}
 									onKeyDown={(e) => {
+										if (e.key === "Escape" && chatDictating) void dictation.stop();
 										if (e.key === "Enter" && !e.shiftKey) {
 											e.preventDefault();
 											send(input);
 										}
 									}}
 								/>
-								<button type="button" className="icon-btn" title={t("dictate")} aria-label={t("dictate")} onClick={() => setDictation({ kind: "chat" })}>
+								<button
+									type="button"
+									className={`icon-btn dictate-btn${chatDictating ? " recording" : ""}`}
+									title={chatDictating ? t("dictEnd") : t("dictStart")}
+									aria-label={chatDictating ? t("dictEnd") : t("dictStart")}
+									aria-pressed={chatDictating}
+									disabled={!!liveStatus}
+									onClick={toggleChatDictation}
+									style={chatDictating ? ({ "--dict-level": String(Math.min(1, dictation.level * 6)) } as React.CSSProperties) : undefined}
+								>
 									<span className="material-symbols-outlined" aria-hidden="true">
-										keyboard_voice
+										{chatDictating ? (dictation.state === "connecting" || dictation.state === "transcribing" ? "progress_activity" : "stop_circle") : "keyboard_voice"}
 									</span>
 								</button>
 								{!liveStatus && (
@@ -565,7 +714,7 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 					</div>
 				</main>
 
-				{formOpen && (
+				{panelOpen && (
 					<>
 						<button
 							type="button"
@@ -584,33 +733,43 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 								if (e.key === "End") setChatWidth(65);
 							}}
 						/>
-						<FormPanel
-							t={t}
-							uiLanguage={settings.language}
-							onClose={() => formStore.reset()}
-							onSubmit={manualSubmit}
-							onAskIda={askAboutField}
-							onDictateField={(fieldId, label) => setDictation({ kind: "field", fieldId, label })}
-						/>
+						{panel.active === "appointments" ? (
+							<AppointmentPanel t={t} lang={settings.language} onPick={pickSlot} />
+						) : (
+							<FormPanel
+								t={t}
+								uiLanguage={settings.language}
+								onClose={() => formStore.reset()}
+								onSubmit={manualSubmit}
+								onAskIda={askAboutField}
+								onDictateField={toggleFieldDictation}
+								dictatingField={dictation.target?.kind === "field" ? dictation.target.fieldId : null}
+							/>
+						)}
 					</>
 				)}
 			</div>
 
 			{confirm?.kind === "submit" && <ConfirmSubmissionDialog t={t} onDecide={decide} />}
-			{confirm?.kind === "book" && <ConfirmBookingDialog t={t} slotLabel={confirm.slotLabel} onDecide={decide} />}
-			{dictation && (
-				<DictationDialog
-					t={t}
-					settings={settings}
-					targetLabel={dictation.kind === "chat" ? t("dictChat") : dictation.label}
-					onClose={() => setDictation(null)}
-					onApply={(text) => {
-						if (dictation.kind === "chat") {
-							setInput((prev) => (prev ? `${prev} ${text}` : text));
-							inputRef.current?.focus();
-						} else setFieldByCitizen(dictation.fieldId, text, settings.language);
-						setDictation(null);
-					}}
+			{confirm?.kind === "book" && (
+				<ConfirmActionDialog
+					title={t("bookTitle")}
+					text={confirm.slotLabel}
+					confirmLabel={t("bookConfirm")}
+					cancelLabel={t("cancel")}
+					icon="event"
+					onDecide={decide}
+				/>
+			)}
+			{confirm?.kind === "cancel" && (
+				<ConfirmActionDialog
+					title={t("apptCancelTitle")}
+					text={confirm.label}
+					confirmLabel={t("apptCancelConfirm")}
+					cancelLabel={t("close")}
+					icon="event_busy"
+					danger
+					onDecide={decide}
 				/>
 			)}
 			{toast && (

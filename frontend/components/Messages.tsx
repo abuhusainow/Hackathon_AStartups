@@ -3,13 +3,16 @@
  * (submission, booking, human handoff).
  */
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
+import { useState } from "react";
 import type { UiKey } from "../../src/shared/ui-strings";
 import type { T } from "../i18n";
+import { formatDay, formatTime } from "../lib/datetime";
 import { Markdown } from "./Markdown";
 
-export type VoiceTurn = { role: "user" | "assistant"; text: string; final: boolean };
+/** A turn of the voice conversation. `card` holds a tool result (e.g. a reference number) to show visually. */
+export type VoiceTurn = { role: "user" | "assistant"; text: string; final: boolean; card?: ResultLike };
 
-type ResultLike = {
+export type ResultLike = {
 	type?: string;
 	submitted?: boolean;
 	booked?: boolean;
@@ -25,7 +28,47 @@ type ResultLike = {
 	nextSteps?: string[];
 };
 
-function ResultCard({ t, output }: { t: T; output: ResultLike }) {
+function formatWhen(slotTime: string | undefined): string {
+	if (!slotTime) return "";
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(slotTime)) return slotTime;
+	const lang = document.documentElement.lang || "de";
+	return `${formatDay(slotTime, lang)}, ${formatTime(slotTime, lang)}`;
+}
+
+/** Tool results worth showing as a card (also in the voice conversation). */
+export function isCardResult(output: unknown): output is ResultLike {
+	const o = output as ResultLike | null;
+	return !!o && (((o.submitted || o.booked || o.type === "submission_result" || o.type === "booking_result") && !!o.referenceNumber) || o.type === "handoff_result");
+}
+
+/** Reference numbers are shown big, spaced and copyable – they are often read out loud on the phone. */
+function RefNumber({ t, value }: { t: T; value: string }) {
+	const [copied, setCopied] = useState(false);
+	return (
+		<span className="ref-line">
+			<span className="ref" translate="no">
+				{value}
+			</span>
+			<button
+				type="button"
+				className="btn btn-ghost btn-sm"
+				onClick={() =>
+					navigator.clipboard?.writeText(value).then(() => {
+						setCopied(true);
+						setTimeout(() => setCopied(false), 1500);
+					})
+				}
+			>
+				<span className="material-symbols-outlined" aria-hidden="true">
+					{copied ? "check" : "content_copy"}
+				</span>
+				{copied ? t("copied") : t("copy")}
+			</button>
+		</span>
+	);
+}
+
+export function ResultCard({ t, output }: { t: T; output: ResultLike }) {
 	if ((output.submitted || output.type === "submission_result") && output.referenceNumber)
 		return (
 			<div className="result-card success" role="status">
@@ -36,7 +79,7 @@ function ResultCard({ t, output }: { t: T; output: ResultLike }) {
 					{t("submitted")} · {output.serviceName}
 				</h4>
 				<div>
-					{t("reference")}: <span className="ref">{output.referenceNumber}</span>
+					{t("reference")}: <RefNumber t={t} value={output.referenceNumber} />
 				</div>
 				{output.nextSteps && (
 					<ul>
@@ -57,11 +100,18 @@ function ResultCard({ t, output }: { t: T; output: ResultLike }) {
 					{t("booked")}
 				</h4>
 				<div>
-					{output.slotTime?.replace("T", " ")} · {output.office}
+					<strong>{formatWhen(output.slotTime)}</strong> · {output.office}
 				</div>
 				<div>
-					{t("reference")}: <span className="ref">{output.referenceNumber}</span>
+					{t("reference")}: <RefNumber t={t} value={output.referenceNumber} />
 				</div>
+				{output.nextSteps && output.nextSteps.length > 0 && (
+					<ul>
+						{output.nextSteps.map((n) => (
+							<li key={n}>{n}</li>
+						))}
+					</ul>
+				)}
 			</div>
 		);
 	if (output.type === "handoff_result")
@@ -112,6 +162,8 @@ export function MessageList({
 							{m.role === "user" ? profileName : t("idaName")}
 						</div>
 						{m.parts.map((part, i) => {
+							// Voice cards are stored with a short text for the AI's context – the card itself shows it.
+							if (part.type === "text" && isCardResult((m.metadata as { card?: unknown } | undefined)?.card)) return null;
 							if (part.type === "text" && part.text.trim())
 								return (
 									<div key={i} className="bubble">
@@ -147,6 +199,7 @@ export function MessageList({
 							}
 							return null;
 						})}
+						{isCardResult((m.metadata as { card?: unknown } | undefined)?.card) && <ResultCard t={t} output={(m.metadata as { card: ResultLike }).card} />}
 					</div>
 				</div>
 			))}
@@ -160,9 +213,12 @@ export function MessageList({
 							</span>
 							{v.role === "user" ? profileName : t("idaName")}
 						</div>
-						<div className="bubble" style={v.final ? undefined : { opacity: 0.75 }}>
-							<p>{v.text}</p>
-						</div>
+						{v.text.trim() && (
+							<div className="bubble" style={v.final ? undefined : { opacity: 0.75 }}>
+								<p>{v.text}</p>
+							</div>
+						)}
+						{v.card && <ResultCard t={t} output={v.card} />}
 					</div>
 				</div>
 			))}

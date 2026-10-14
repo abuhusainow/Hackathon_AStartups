@@ -38,7 +38,7 @@ Browser (React · Stitch-Design „Federal Civic Architecture“)
 
 | Server-Tools (Worker) | Client-Tools (Browser) |
 |---|---|
-| get_my_profile, find_services, get_service_info, check_eligibility, get_appointment_slots, create_handoff, remember, forget | open_form, fill_fields, focus_field, get_form_state, translate_form, show_original, set_ui_preferences, request_submission, request_appointment_booking, close_form |
+| get_my_profile, find_services, get_service_info, check_eligibility, get_my_appointments, create_handoff, remember, forget | open_form, fill_fields, focus_field, get_form_state, translate_form, show_original, set_ui_preferences, request_submission, show_appointment_slots, request_appointment_booking, close_form |
 
 - **Text-Chat:** AI-SDK-Tools; Client-Tools haben kein `execute` → `useAgentChat.onToolCall` führt sie im Browser aus.
 - **Sprache:** dieselben Schemas als Gemini `functionDeclarations` (`toGeminiSchema`) im Ephemeral Token; der Browser führt Client-Tools lokal aus und leitet Server-Tools an `/api/tools/:name` weiter.
@@ -58,7 +58,24 @@ Browser (React · Stitch-Design „Federal Civic Architecture“)
 - `POST /api/live/token` erzeugt ein **Single-Use-Ephemeral-Token** (`v1alpha/auth_tokens`), in dem Modell, Systemprompt (inkl. Profil, Gedächtnis, Formularstatus), Tools und Stimme fest verankert sind → der API-Key verlässt nie den Worker, der Client kann die Konfiguration nicht ändern.
 - Browser ↔ Gemini direkt (`BidiGenerateContentConstrained`): Mikrofon → AudioWorklet → 16-kHz-PCM; Ausgabe 24 kHz mit Barge-in.
 - Ein- und Ausgabe-Transkription → **Live-Untertitel** (Hörbehinderung) und Gesprächsverlauf; nach Sitzungsende werden Transkript → Chatverlauf und Gedächtnis übernommen.
-- **Diktat:** `gemini-3.5-transcribe-live` streamt Text live in ein editierbares Fenster (Chat oder beliebiges Formularfeld); Fallback: Aufnahme + `/api/transcribe`.
+- **Diktat:** `gemini-3.5-transcribe-live` streamt Text live direkt ins Chat-Eingabefeld oder in ein Formularfeld; Fallback: Aufnahme + `/api/transcribe`.
+
+### 4b. Termine
+- `show_appointment_slots` öffnet rechts die Terminauswahl (`AppointmentPanel` + `SlotPicker`). Die KI übergibt nur den Wunsch
+  (`preferredWeekday`, `preferredDate`, `timeOfDay`) – welche Slots passen, berechnet der Browser (`matchingSlots`), nichts wird geraten.
+- Buchen: Klick auf einen Slot oder `request_appointment_booking` → Bestätigungsdialog → `POST /api/appointments/:slotId/book`
+  → Tabelle `bookings` (Referenznummer). Nach einem Klick bekommt IDA eine kurze Info, damit sie erklären kann, was mitzubringen ist.
+- Seite **„Meine Termine“** (`frontend/screens/Appointments.tsx`, Route `/termine` per `history.pushState`):
+  kommende Termine, .ics-Export, Stornieren (gibt den Slot frei, Eigentümerschaft wird geprüft), Neubuchung, Verlauf.
+- Im Sprachdialog werden Tool-Ergebnisse mit Referenznummer zusätzlich als Karte in den Verlauf gelegt (`VoiceTurn.card`,
+  danach `metadata.card` im Chatverlauf).
+
+### 4c. Mikrofon-Lebenszyklus
+- `MicCapture` prüft nach jedem `await`, ob inzwischen gestoppt wurde; alle Streams stehen in einer Registry →
+  `releaseAllMicrophones()` beim Beenden von Sprachdialog/Diktat und beim Abmelden.
+- Wird der Sprachdialog während des Verbindens beendet, gibt es keinen automatischen Retry.
+- Diktat (`frontend/lib/use-dictation.ts`): eine Sitzung pro Start mit Generationszähler, Zwischen- und Endtranskripte
+  (`interimInputTranscription` / `inputTranscription`) direkt ins Eingabefeld, Auto-Stopp nach 2 Minuten oder wenn der Tab verborgen wird.
 
 ### 5. Gedächtnis mit Entscheidungsmodell
 `src/memory/*` – nach jeder Chat-Antwort (`waitUntil`) und am Ende jeder Sprachsitzung entscheidet ein separates Modell, was gespeichert/gelöscht wird:

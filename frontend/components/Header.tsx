@@ -17,9 +17,11 @@ type Props = {
 	onNewChat: () => void;
 	onLogout: () => void;
 	memoryVersion: number;
+	view: "assistant" | "appointments";
+	onNavigate: (view: "assistant" | "appointments") => void;
 };
 
-export function Header({ t, profile, settings, readAloud, onSettings, onNewChat, onLogout, memoryVersion }: Props) {
+export function Header({ t, profile, settings, readAloud, onSettings, onNewChat, onLogout, memoryVersion, view, onNavigate }: Props) {
 	const [open, setOpen] = useState(false);
 	const [memory, setMemory] = useState<MemoryItem[] | null>(null);
 	const popRef = useRef<HTMLDivElement>(null);
@@ -75,13 +77,35 @@ export function Header({ t, profile, settings, readAloud, onSettings, onNewChat,
 
 					<div className="header-right">
 						<nav className="header-nav" aria-label="Hauptnavigation">
-							<a href="#services" aria-label={t("navServices")}>
+							<a
+								href="/"
+								aria-label={t("navServices")}
+								aria-current={view === "assistant" ? "page" : undefined}
+								onClick={(e) => {
+									e.preventDefault();
+									onNavigate("assistant");
+								}}
+							>
 								<span className="material-symbols-outlined" aria-hidden="true">
 									account_balance
 								</span>
 								<span className="nav-label">{t("navServices")}</span>
 							</a>
-							<a href="#safe" aria-label={t("navSafe")}>
+							<a
+								href="/termine"
+								aria-label={t("navAppointments")}
+								aria-current={view === "appointments" ? "page" : undefined}
+								onClick={(e) => {
+									e.preventDefault();
+									onNavigate("appointments");
+								}}
+							>
+								<span className="material-symbols-outlined" aria-hidden="true">
+									event
+								</span>
+								<span className="nav-label">{t("navAppointments")}</span>
+							</a>
+							<a href="#safe" className="nav-safe" aria-label={t("navSafe")}>
 								<span className="material-symbols-outlined" aria-hidden="true">
 									folder_shared
 								</span>
@@ -204,6 +228,19 @@ export function Header({ t, profile, settings, readAloud, onSettings, onNewChat,
 						)}
 
 						<div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>
+							<button
+								type="button"
+								className="btn btn-secondary btn-sm"
+								onClick={() => {
+									setOpen(false);
+									onNavigate("appointments");
+								}}
+							>
+								<span className="material-symbols-outlined" aria-hidden="true">
+									event
+								</span>
+								{t("navAppointments")}
+							</button>
 							<button
 								type="button"
 								className="btn btn-secondary btn-sm"
