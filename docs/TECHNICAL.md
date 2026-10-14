@@ -77,12 +77,22 @@ Browser (React · Stitch-Design „Federal Civic Architecture“)
 - Diktat (`frontend/lib/use-dictation.ts`): eine Sitzung pro Start mit Generationszähler, Zwischen- und Endtranskripte
   (`interimInputTranscription` / `inputTranscription`) direkt ins Eingabefeld, Auto-Stopp nach 2 Minuten oder wenn der Tab verborgen wird.
 
+### 4d. Gespräche, Dokumente, Seitenleiste
+- **Gespräche:** pro Gespräch eine Agent-Instanz `<personaId>--<conversationId>` (Durable Object mit dem Verlauf). Die Tabelle
+  `conversations` (D1) hält nur Titel (erste Nachricht) und Zeitstempel für die Seitenleiste; Löschen markiert die Zeile und leert
+  den Verlauf im Agenten (`wipeConversation` per RPC). Das offene Gespräch steht in `localStorage` (Neuladen behält es).
+- **Dokumente:** Tabelle `documents_store` – bei jeder Einreichung eine Kopie des deutschen Formulars + Bestätigung
+  (Meldebestätigung bzw. Eingangsbestätigung), bei jeder Buchung eine Terminbestätigung (Storno → „storniert“).
+  `frontend/screens/Documents.tsx` rendert sie als druckbares Papier; Ausweise kommen aus den Registerdaten.
+- **Seiten:** `/` Assistent, `/termine`, `/dokumente`, `/gedaechtnis` (Routing per `history.pushState`).
+
 ### 5. Gedächtnis mit Entscheidungsmodell
 `src/memory/*` – nach jeder Chat-Antwort (`waitUntil`) und am Ende jeder Sprachsitzung entscheidet ein separates Modell, was gespeichert/gelöscht wird:
 - Kategorien `language`, `barrier`, `preference`, `context`; feste Schlüssel, die die UI direkt anwendet (`preferred_language`, `text_size`, `high_contrast`, `easy_language`, `prefers_voice`, `read_aloud`).
 - Regeln: nur was die Person selbst mitteilt; keine Ausweis-/SV-Nummern, IBANs, Einmal-Antragsdaten, Namen, Spekulationen.
 - Beim Login: Persona-Barrieren (Register) + Gedächtnis → Sprache, Schriftgröße, Kontrast, Leichte Sprache werden automatisch gesetzt.
-- Transparenz (DSGVO): „Was IDA über mich weiß“ zeigt und löscht Einträge.
+- Transparenz (DSGVO): eigene Seite „Was IDA sich merkt“ – Einträge ansehen, korrigieren, selbst ergänzen, löschen.
+- Sicherheitsnetz: `keepMemoryKey()` verwirft Schlüssel, die nach Einmal-Antragsdaten aussehen (Antrag, Adresse, Termin, Nummern …).
 - Provider: `MEMORY_PROVIDER=auto` → Claude (über AI Gateway, wenn `ANTHROPIC_API_KEY`) → Workers AI → Gemini.
 
 ### 6. Robustheit

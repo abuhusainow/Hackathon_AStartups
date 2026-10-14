@@ -10,7 +10,7 @@ import { getServiceDefinition } from "../src/gov/data/services";
 import { PERSONAS } from "../src/gov/data/personas";
 import { validateApplicationData } from "../src/gov/service";
 import { normalizeKey } from "../src/memory/store";
-import { parseDecision, preferencesFrom } from "../src/memory/extract";
+import { keepMemoryKey, parseDecision, preferencesFrom } from "../src/memory/extract";
 import { atToIso, collectTexts, FORMS, isoToAt, missingRequired, parseAddress, allFields } from "../src/shared/forms";
 import { CLIENT_TOOL_NAMES, SERVER_TOOL_NAMES } from "../src/shared/tool-names";
 
@@ -117,6 +117,15 @@ describe("memory", () => {
 		const d = parseDecision('Sure:\n```json\n{"upserts":[{"key":"preferred_language","value":"uk","category":"language"}],"deletes":[],"summary":"Asked for family allowance."}\n```');
 		expect(d?.upserts[0].value).toBe("uk");
 		expect(parseDecision("no json here")).toBeNull();
+	});
+
+	it("drops one-off case data from the decision model, keeps needs and preferences", () => {
+		expect(keepMemoryKey("applying_for_childcare")).toBe(false);
+		expect(keepMemoryKey("current_application")).toBe(false);
+		expect(keepMemoryKey("new_address")).toBe(false);
+		expect(keepMemoryKey("preferred_language")).toBe(true);
+		expect(keepMemoryKey("children")).toBe(true);
+		expect(keepMemoryKey("vision")).toBe(true);
 	});
 
 	it("normalizes keys", () => {
@@ -238,5 +247,60 @@ describe("session-scoped API", () => {
 		const lena = await login("lena-huber");
 		const res = await SELF.fetch(`https://example.com/api/appointments/${booked.bookingId}/cancel`, { method: "POST", headers: { cookie: lena } });
 		expect(res.status).toBe(404);
+	});
+
+	it("lists conversations with a title and hides deleted ones", async () => {
+		const cookie = await login("sofia-rossi");
+		const headers = { cookie, "content-type": "application/json" };
+		const conv = (await (await SELF.fetch("https://example.com/api/conversations", { method: "POST", headers })).json()) as any;
+		let list = (await (await SELF.fetch("https://example.com/api/conversations", { headers })).json()) as any[];
+		expect(list.find((c) => c.id === conv.id)).toBeUndefined(); // no title yet → not listed
+		await SELF.fetch(`https://example.com/api/conversations/${conv.id}`, { method: "PATCH", headers, body: JSON.stringify({ title: "Ummeldung Wien", ifEmpty: true }) });
+		list = (await (await SELF.fetch("https://example.com/api/conversations", { headers })).json()) as any[];
+		expect(list.find((c) => c.id === conv.id)?.title).toBe("Ummeldung Wien");
+		await SELF.fetch(`https://example.com/api/conversations/${conv.id}`, { method: "DELETE", headers });
+		list = (await (await SELF.fetch("https://example.com/api/conversations", { headers })).json()) as any[];
+		expect(list.find((c) => c.id === conv.id)).toBeUndefined();
+	});
+
+	it("stores the submitted form and the confirmation in 'Meine Dokumente'", async () => {
+		const cookie = await login("david-novak");
+		const headers = { cookie, "content-type": "application/json" };
+		const form = FORMS.find((f) => f.id === "meldezettel")!;
+		const values = {
+			...form.prefill(PERSONAS.find((p) => p.id === "david-novak")!, "2026-10-14"),
+			einzugsdatum: "01.10.2026",
+			strasse: "Praterstraße",
+			hausnummer: "1",
+			plz: "1020",
+			ort: "Wien",
+			unterkunftgeber_name: "Muster GmbH",
+			unterkunftgeber_unterschrift: "yes",
+			erklaerung_richtig: "yes",
+		};
+		const res = (await (await SELF.fetch("https://example.com/api/forms/meldezettel/submit", { method: "POST", headers, body: JSON.stringify({ values }) })).json()) as any;
+		const docs = (await (await SELF.fetch("https://example.com/api/documents", { headers })).json()) as any[];
+		const app = docs.find((d) => d.id === res.applicationDocId);
+		const conf = docs.find((d) => d.id === res.confirmationDocId);
+		expect(app.kind).toBe("application");
+		expect(app.data.values.strasse).toBe("Praterstraße");
+		expect(conf.title).toBe("Meldebestätigung");
+		expect(conf.referenceNumber).toBe(res.referenceNumber);
+		// another citizen cannot open it
+		const other = await login("lena-huber");
+		expect((await SELF.fetch(`https://example.com/api/documents/${app.id}`, { headers: { cookie: other } })).status).toBe(404);
+	});
+
+	it("lets the citizen add and correct memory entries", async () => {
+		const cookie = await login("amira-haddad");
+		const headers = { cookie, "content-type": "application/json" };
+		const list = (await (
+			await SELF.fetch("https://example.com/api/memory", { method: "POST", headers, body: JSON.stringify({ key: "Kontaktwunsch", value: "lieber per E-Mail", category: "preference" }) })
+		).json()) as any[];
+		const entry = list.find((m) => m.key === "kontaktwunsch");
+		expect(entry.value).toBe("lieber per E-Mail");
+		await SELF.fetch(`https://example.com/api/memory/${entry.id}`, { method: "PATCH", headers, body: JSON.stringify({ value: "lieber telefonisch" }) });
+		const after = (await (await SELF.fetch("https://example.com/api/memory", { headers })).json()) as any[];
+		expect(after.find((m) => m.id === entry.id).value).toBe("lieber telefonisch");
 	});
 });

@@ -55,6 +55,7 @@ app.all("/agents/*", async (c) => {
 	if (!session) return c.json({ error: "Not logged in" }, 401);
 	const name = decodeURIComponent(new URL(c.req.url).pathname.split("/")[3] ?? "");
 	if (personaFromAgentName(name) !== session.pid) return c.json({ error: "This conversation belongs to another citizen" }, 403);
+	if (!/^[a-z0-9-]+--[a-f0-9-]{8,64}$/.test(name)) return c.json({ error: "Invalid conversation" }, 400);
 	return (await routeAgentRequest(c.req.raw, c.env)) ?? c.text("Agent not found", 404);
 });
 

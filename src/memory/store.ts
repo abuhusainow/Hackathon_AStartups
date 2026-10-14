@@ -119,6 +119,22 @@ export async function deleteMemoryItem(db: D1Database, citizenId: string, id: st
 	return (res.meta.changes ?? 0) > 0;
 }
 
+export async function updateMemoryItem(
+	db: D1Database,
+	citizenId: string,
+	id: string,
+	patch: { value?: string; category?: MemoryCategory },
+): Promise<boolean> {
+	await ensureMemoryTables(db);
+	const res = await db
+		.prepare(
+			"UPDATE user_memory SET value = COALESCE(?, value), category = COALESCE(?, category), source = 'explicit', confidence = 1, updated_at = ? WHERE citizen_id = ? AND id = ?",
+		)
+		.bind(patch.value?.trim().slice(0, 500) || null, patch.category && CATEGORIES.includes(patch.category) ? patch.category : null, new Date().toISOString(), citizenId, id)
+		.run();
+	return (res.meta.changes ?? 0) > 0;
+}
+
 export async function clearMemory(db: D1Database, citizenId: string): Promise<void> {
 	await ensureMemoryTables(db);
 	await db.batch([

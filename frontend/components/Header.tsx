@@ -4,8 +4,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGES, isValidLanguageCode } from "../../src/shared/languages";
-import type { AssistantSettings, MemoryItem } from "../../src/shared/types";
-import { api, type Profile } from "../api";
+import type { AssistantSettings } from "../../src/shared/types";
+import type { Profile } from "../api";
 import type { T } from "../i18n";
 
 type Props = {
@@ -14,22 +14,16 @@ type Props = {
 	settings: AssistantSettings;
 	readAloud: boolean;
 	onSettings: (patch: Partial<AssistantSettings> & { readAloud?: boolean }) => void;
-	onNewChat: () => void;
 	onLogout: () => void;
-	memoryVersion: number;
-	view: "assistant" | "appointments";
-	onNavigate: (view: "assistant" | "appointments") => void;
+	onToggleSidebar: () => void;
+	sidebarOpen: boolean;
 };
 
-export function Header({ t, profile, settings, readAloud, onSettings, onNewChat, onLogout, memoryVersion, view, onNavigate }: Props) {
+export function Header({ t, profile, settings, readAloud, onSettings, onLogout, onToggleSidebar, sidebarOpen }: Props) {
 	const [open, setOpen] = useState(false);
-	const [memory, setMemory] = useState<MemoryItem[] | null>(null);
 	const popRef = useRef<HTMLDivElement>(null);
 	const btnRef = useRef<HTMLButtonElement>(null);
 
-	useEffect(() => {
-		if (open) api.memory().then(setMemory).catch(() => setMemory([]));
-	}, [open, memoryVersion]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -52,8 +46,6 @@ export function Header({ t, profile, settings, readAloud, onSettings, onNewChat,
 
 	const languageKnown = LANGUAGES.some((l) => l.code === settings.language);
 	const initials = `${profile.firstName[0] ?? ""}${profile.lastName[0] ?? ""}`;
-	const catLabel = (c: MemoryItem["category"]) =>
-		({ preference: t("memoryCatPreference"), language: t("memoryCatLanguage"), barrier: t("memoryCatBarrier"), context: t("memoryCatContext") })[c];
 
 	return (
 		<>
@@ -67,6 +59,18 @@ export function Header({ t, profile, settings, readAloud, onSettings, onNewChat,
 			<header className="app-header">
 				<div className="app-header-inner">
 					<div className="brand">
+						<button
+							type="button"
+							className="icon-btn sidebar-toggle"
+							aria-label={t("sidebarToggle")}
+							aria-expanded={sidebarOpen}
+							title={t("sidebarToggle")}
+							onClick={onToggleSidebar}
+						>
+							<span className="material-symbols-outlined" aria-hidden="true">
+								menu
+							</span>
+						</button>
 						<img src="/emblem.png" alt="" />
 						<div className="brand-divider" aria-hidden="true" />
 						<div className="brand-text">
@@ -76,43 +80,7 @@ export function Header({ t, profile, settings, readAloud, onSettings, onNewChat,
 					</div>
 
 					<div className="header-right">
-						<nav className="header-nav" aria-label="Hauptnavigation">
-							<a
-								href="/"
-								aria-label={t("navServices")}
-								aria-current={view === "assistant" ? "page" : undefined}
-								onClick={(e) => {
-									e.preventDefault();
-									onNavigate("assistant");
-								}}
-							>
-								<span className="material-symbols-outlined" aria-hidden="true">
-									account_balance
-								</span>
-								<span className="nav-label">{t("navServices")}</span>
-							</a>
-							<a
-								href="/termine"
-								aria-label={t("navAppointments")}
-								aria-current={view === "appointments" ? "page" : undefined}
-								onClick={(e) => {
-									e.preventDefault();
-									onNavigate("appointments");
-								}}
-							>
-								<span className="material-symbols-outlined" aria-hidden="true">
-									event
-								</span>
-								<span className="nav-label">{t("navAppointments")}</span>
-							</a>
-							<a href="#safe" className="nav-safe" aria-label={t("navSafe")}>
-								<span className="material-symbols-outlined" aria-hidden="true">
-									folder_shared
-								</span>
-								<span className="nav-label">{t("navSafe")}</span>
-							</a>
-						</nav>
-						<div className="v-divider" aria-hidden="true" />
+						
 						<span className="id-badge" title="ID Austria">
 							<span className="material-symbols-outlined icon-fill" aria-hidden="true">
 								verified_user
@@ -191,69 +159,7 @@ export function Header({ t, profile, settings, readAloud, onSettings, onNewChat,
 						<Toggle label={t("easyLanguage")} checked={settings.easyLanguage} onChange={(v) => onSettings({ easyLanguage: v })} />
 						<Toggle label={t("readAloud")} checked={readAloud} onChange={(v) => onSettings({ readAloud: v })} />
 
-						<h3>{t("memoryTitle")}</h3>
-						<p className="muted">{t("memoryExplain")}</p>
-						{memory === null ? (
-							<span className="spinner" />
-						) : memory.length === 0 ? (
-							<p className="muted">{t("memoryEmpty")}</p>
-						) : (
-							<>
-								<ul className="memory-list">
-									{memory.map((m) => (
-										<li key={m.id} className="memory-item">
-											<div style={{ flex: 1 }}>
-												<span className={`cat ${m.category}`}>{catLabel(m.category)}</span>
-												<div>
-													<strong>{m.key.replace(/_/g, " ")}</strong>: {m.value}
-												</div>
-											</div>
-											<button
-												type="button"
-												className="icon-btn"
-												aria-label={`${t("memoryDelete")}: ${m.key}`}
-												onClick={() => api.deleteMemory(m.id).then(() => setMemory((list) => list?.filter((x) => x.id !== m.id) ?? null))}
-											>
-												<span className="material-symbols-outlined" aria-hidden="true">
-													delete
-												</span>
-											</button>
-										</li>
-									))}
-								</ul>
-								<button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => api.clearMemory().then(() => setMemory([]))}>
-									{t("memoryDeleteAll")}
-								</button>
-							</>
-						)}
-
 						<div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>
-							<button
-								type="button"
-								className="btn btn-secondary btn-sm"
-								onClick={() => {
-									setOpen(false);
-									onNavigate("appointments");
-								}}
-							>
-								<span className="material-symbols-outlined" aria-hidden="true">
-									event
-								</span>
-								{t("navAppointments")}
-							</button>
-							<button
-								type="button"
-								className="btn btn-secondary btn-sm"
-								onClick={() => {
-									setOpen(false);
-									onNewChat();
-								}}
-							>
-								<span className="material-symbols-outlined" aria-hidden="true">
-									add_comment
-								</span>
-								{t("newChat")}
-							</button>
 							<button type="button" className="btn btn-ghost btn-sm" onClick={onLogout}>
 								<span className="material-symbols-outlined" aria-hidden="true">
 									logout

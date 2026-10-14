@@ -11,6 +11,7 @@
 import { AIChatAgent, type OnChatMessageOptions } from "@cloudflare/ai-chat";
 import { convertToModelMessages, pruneMessages, stepCountIs, streamText, type UIMessage } from "ai";
 import { personaFromAgentName } from "../auth/session";
+import { touchConversation } from "../conversations/store";
 import { getChatModel, MAX_STEPS } from "../config";
 import { today } from "../gov/service";
 import { runMemoryDecision, type TranscriptTurn } from "../memory/extract";
@@ -62,11 +63,19 @@ export class CitizenAssistant extends AIChatAgent<Env, AssistantSettings> {
 		if (next.contrast !== "normal" && next.contrast !== "high") throw new Error("contrast must be normal or high");
 	}
 
+	/** Deletes the stored conversation (called via RPC when the citizen deletes a chat). */
+	async wipeConversation() {
+		await this.persistMessages([]);
+	}
+
 	async onChatMessage(_onFinish: unknown, options?: OnChatMessageOptions) {
 		const settings = { ...DEFAULT_SETTINGS, ...this.state };
 		const citizenId = this.citizenId;
 		const formState = parseFormState(options?.body?.formState);
 		const context = await loadCitizenContext(this.env, citizenId);
+		// Sidebar "Gespräche": first user message becomes the title, timestamp is updated.
+		const firstUserText = transcriptOf(this.messages).find((m) => m.role === "user")?.text;
+		this.ctx.waitUntil(touchConversation(this.env.GOV_DB, citizenId, this.name.split("--")[1] ?? "", firstUserText).catch(() => {}));
 		const metadata = { app: "ida-chat", session: this.name, persona: citizenId };
 
 		const result = streamText({

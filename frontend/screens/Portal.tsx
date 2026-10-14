@@ -28,14 +28,28 @@ import { GeminiLiveSession, type LiveStatus } from "../lib/gemini-live";
 import { bookSlot, createClientToolExecutor, formStateSnapshot, formStore, setFieldByCitizen, useFormStore } from "../lib/form-store";
 import { panelStore, usePanelStore } from "../lib/panel-store";
 import { useDictation } from "../lib/use-dictation";
+import { Sidebar, type View } from "../components/Sidebar";
 import { Appointments } from "./Appointments";
+import { Documents } from "./Documents";
+import { MemoryPage } from "./MemoryPage";
+import type { Conversation } from "../api";
 
-type Confirm = { kind: "submit" } | { kind: "book"; slotLabel: string } | { kind: "cancel"; label: string };
-type View = "assistant" | "appointments";
+type Confirm =
+	| { kind: "submit" }
+	| { kind: "book"; slotLabel: string }
+	| { kind: "cancel"; label: string }
+	| { kind: "delete"; title: string; text: string };
+
+const PATHS: Record<View, string> = { assistant: "/", appointments: "/termine", documents: "/dokumente", memory: "/gedaechtnis" };
 
 function viewFromPath(): View {
-	return window.location.pathname.startsWith("/termine") ? "appointments" : "assistant";
+	const path = window.location.pathname;
+	return (Object.entries(PATHS).find(([, p]) => p !== "/" && path.startsWith(p))?.[0] as View | undefined) ?? "assistant";
 }
+
+/** Settings survive switching conversations (the portal is re-mounted per conversation). */
+let sessionSettings: AssistantSettings | null = null;
+let sessionReadAloud: boolean | null = null;
 
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
@@ -43,9 +57,24 @@ function speechLang(lang: string) {
 	return lang === "de-x-easy" ? "de-AT" : lang;
 }
 
-export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
-	const [settings, setSettings] = useState<AssistantSettings>(() => ({ ...DEFAULT_SETTINGS, ...me.preferences }));
-	const [readAloud, setReadAloud] = useState(() => !!me.profile.accessibility.vision || me.memory.some((m) => m.key === "read_aloud" && m.value === "true"));
+type PortalProps = {
+	me: Me;
+	conversationId: string;
+	onOpenConversation: (id: string) => void;
+	onNewConversation: () => void;
+	onLogout: () => void;
+};
+
+export function Portal({ me, conversationId, onOpenConversation, onNewConversation, onLogout }: PortalProps) {
+	const [settings, setSettings] = useState<AssistantSettings>(() => sessionSettings ?? { ...DEFAULT_SETTINGS, ...me.preferences });
+	const [readAloud, setReadAloud] = useState(
+		() => sessionReadAloud ?? (!!me.profile.accessibility.vision || me.memory.some((m) => m.key === "read_aloud" && m.value === "true")),
+	);
+	sessionSettings = settings;
+	sessionReadAloud = readAloud;
+	const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 1101px)").matches);
+	const [conversations, setConversations] = useState<Conversation[]>([]);
+	const [documentsKey, setDocumentsKey] = useState(0);
 	const { t } = useUi(settings.language);
 	const form = useFormStore();
 	const panel = usePanelStore();
@@ -60,7 +89,6 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	const [tab, setTab] = useState<"chat" | "form">("chat");
 	const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
 	const [voiceTurns, setVoiceTurns] = useState<VoiceTurn[]>([]);
-	const [memoryVersion, setMemoryVersion] = useState(0);
 	const liveRef = useRef<GeminiLiveSession | null>(null);
 	/** Set when the citizen ends the voice dialog – no automatic retry, microphone released. */
 	const liveEndedByUser = useRef(false);
@@ -76,7 +104,13 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	// Settings → document (text size, contrast, language, direction) and → agent
 	// ---------------------------------------------------------------------------------------------
 
-	const agent = useAgent<AssistantSettings>({ agent: "CitizenAssistant", name: me.agentName });
+	// One chat agent instance per conversation: "<personaId>--<conversationId>".
+	const agent = useAgent<AssistantSettings>({ agent: "CitizenAssistant", name: `${me.profile.id}--${conversationId}` });
+
+	const loadConversations = useCallback(() => {
+		api.conversations().then(setConversations).catch(() => {});
+	}, []);
+	useEffect(loadConversations, [loadConversations]);
 
 	useEffect(() => {
 		const root = document.documentElement;
@@ -132,7 +166,10 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 				confirmSubmission: () => askConfirm({ kind: "submit" }),
 				confirmBooking: (slot) => askConfirm({ kind: "book", slotLabel: slot.slotLabel }),
 				notify: showToast,
-				onSubmitted: () => setAppointmentsKey((k) => k + 1),
+				onSubmitted: () => {
+					setAppointmentsKey((k) => k + 1);
+					setDocumentsKey((k) => k + 1);
+				},
 			}),
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[me.profile],
@@ -142,7 +179,7 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	// Text chat
 	// ---------------------------------------------------------------------------------------------
 
-	const { messages, sendMessage, status, stop, setMessages, clearHistory, error, regenerate } = useAgentChat({
+	const { messages, sendMessage, status, stop, setMessages, error, regenerate } = useAgentChat({
 		agent,
 		body: () => ({ formState: formStateSnapshot() }),
 		onToolCall: async ({ toolCall, addToolOutput }) => {
@@ -181,13 +218,13 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 		window.speechSynthesis.speak(u);
 	}, [messages, busy, readAloud, liveStatus, settings.language]);
 
-	// Memory panel refresh after each answer (the decision model runs in the background).
+	// After each answer: refresh the conversation list (title, order in the sidebar).
 	useEffect(() => {
 		if (status === "ready" && messages.length) {
-			const id = window.setTimeout(() => setMemoryVersion((v) => v + 1), 4000);
+			const id = window.setTimeout(loadConversations, 1500);
 			return () => clearTimeout(id);
 		}
-	}, [status, messages.length]);
+	}, [status, messages.length, loadConversations]);
 
 	function send(text: string) {
 		if (dictation.active) void dictation.stop();
@@ -311,8 +348,10 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 			setMessages((prev) => [...prev, ...voiceMessages]);
 			// … and let the decision model update the memory.
 			const transcript = turns.filter((v) => v.text.trim()).map((v) => ({ role: v.role, text: v.text.trim() }));
-			if (transcript.length)
-				api.ingestTranscript(transcript).then(() => window.setTimeout(() => setMemoryVersion((x) => x + 1), 5000));
+			if (transcript.length) void api.ingestTranscript(transcript);
+			// A conversation that only happened by voice gets its title from the first sentence.
+			const firstUser = transcript.find((v) => v.role === "user")?.text;
+			if (firstUser) api.titleConversation(conversationId, firstUser, true).then(loadConversations).catch(() => {});
 		}
 		setVoiceTurns([]);
 	}
@@ -349,6 +388,14 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	/** Text that was already there + the dictated text (with a space in between). */
 	const join = (base: string, dictated: string) => (base && dictated && !/\s$/.test(base) ? `${base} ${dictated}` : base + dictated);
 
+	// When a chat dictation ends (pause, stop button), the text waits in the input – focus it.
+	const wasDictatingChat = useRef(false);
+	useEffect(() => {
+		const now = dictation.target?.kind === "chat";
+		if (wasDictatingChat.current && !now) inputRef.current?.focus();
+		wasDictatingChat.current = now;
+	}, [dictation.target]);
+
 	function toggleChatDictation() {
 		if (dictation.target?.kind === "chat") return void dictation.stop();
 		if (liveRef.current) return;
@@ -368,6 +415,13 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	// Pages ("/" assistant, "/termine" my appointments)
 	// ---------------------------------------------------------------------------------------------
 
+	// Links in result cards ("In Meine Dokumente ansehen").
+	useEffect(() => {
+		const onNav = (e: Event) => navigate((e as CustomEvent<View>).detail);
+		window.addEventListener("ida:navigate", onNav);
+		return () => window.removeEventListener("ida:navigate", onNav);
+	});
+
 	useEffect(() => {
 		const onPop = () => setView(viewFromPath());
 		window.addEventListener("popstate", onPop);
@@ -375,10 +429,18 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 	}, []);
 
 	function navigate(next: View) {
-		const path = next === "appointments" ? "/termine" : "/";
+		const path = PATHS[next];
 		if (window.location.pathname !== path) window.history.pushState({}, "", path);
 		setView(next);
-		window.scrollTo(0, 0);
+		if (window.matchMedia("(max-width: 1100px)").matches) setSidebarOpen(false);
+		document.querySelector(".app-main")?.scrollTo(0, 0);
+	}
+
+	async function deleteConversation(c: Conversation) {
+		if (!(await askConfirm({ kind: "delete", title: t("deleteConversationTitle"), text: `„${c.title}“ – ${t("deleteConversationText")}` }))) return;
+		await api.deleteConversation(c.id).catch(() => {});
+		if (c.id === conversationId) onNewConversation();
+		else loadConversations();
 	}
 
 	/** The citizen tapped a free slot in the panel → confirm → book → tell IDA. */
@@ -479,22 +541,43 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 				settings={settings}
 				readAloud={readAloud}
 				onSettings={applySettings}
-				memoryVersion={memoryVersion}
-				onNewChat={() => {
-					clearHistory();
-					formStore.reset();
-					panelStore.reset();
-					setVoiceTurns([]);
-					navigate("assistant");
-				}}
 				onLogout={() => {
 					stopLive();
 					void dictation.stop();
 					onLogout();
 				}}
-				view={view}
-				onNavigate={navigate}
+				sidebarOpen={sidebarOpen}
+				onToggleSidebar={() => setSidebarOpen((o) => !o)}
 			/>
+
+			<div className={`app-body${sidebarOpen ? " with-sidebar" : ""}`}>
+			<Sidebar
+				t={t}
+				lang={settings.language}
+				open={sidebarOpen}
+				view={view}
+				conversations={conversations}
+				currentConversationId={conversationId}
+				onNavigate={navigate}
+				onNewConversation={() => {
+					if (window.location.pathname !== "/") window.history.pushState({}, "", "/");
+					onNewConversation();
+				}}
+				onSelectConversation={(id) => {
+					if (window.location.pathname !== "/") window.history.pushState({}, "", "/");
+					if (id === conversationId) navigate("assistant");
+					else onOpenConversation(id);
+				}}
+				onDeleteConversation={deleteConversation}
+				onClose={() => setSidebarOpen(false)}
+			/>
+			<div className="app-main">
+
+			{view === "documents" && <Documents t={t} lang={settings.language} profile={me.profile} refreshKey={documentsKey} />}
+
+			{view === "memory" && (
+				<MemoryPage t={t} lang={settings.language} confirmDelete={(title, text) => askConfirm({ kind: "delete", title, text })} />
+			)}
 
 			{view === "appointments" && (
 				<Appointments
@@ -504,7 +587,10 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 					onAskIda={() => navigate("assistant")}
 					confirmBooking={(slot) => askConfirm({ kind: "book", slotLabel: slot.slotLabel })}
 					confirmCancel={(label) => askConfirm({ kind: "cancel", label })}
-					notify={showToast}
+					notify={(text) => {
+						showToast(text);
+						setDocumentsKey((k) => k + 1);
+					}}
 				/>
 			)}
 
@@ -749,8 +835,21 @@ export function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
 					</>
 				)}
 			</div>
+			</div>
+			</div>
 
 			{confirm?.kind === "submit" && <ConfirmSubmissionDialog t={t} onDecide={decide} />}
+			{confirm?.kind === "delete" && (
+				<ConfirmActionDialog
+					title={confirm.title}
+					text={confirm.text}
+					confirmLabel={t("memoryDelete")}
+					cancelLabel={t("cancel")}
+					icon="delete"
+					danger
+					onDecide={decide}
+				/>
+			)}
 			{confirm?.kind === "book" && (
 				<ConfirmActionDialog
 					title={t("bookTitle")}

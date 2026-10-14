@@ -10,7 +10,9 @@
  *   POST /api/live/token               {mode, settings, formState} → ephemeral Gemini Live token
  *   POST /api/transcribe               {audio, mimeType} → text (dictation fallback)
  *   POST /api/translate                {kind:"form", formId, lang} | {kind:"ui", lang}
- *   GET/DELETE /api/memory · DELETE /api/memory/:id · POST /api/memory/ingest {transcript}
+ *   GET/POST/DELETE /api/memory · PATCH/DELETE /api/memory/:id · POST /api/memory/ingest {transcript}
+ *   GET/POST /api/conversations · PATCH/DELETE /api/conversations/:id   sidebar "Gespräche"
+ *   GET /api/documents · GET /api/documents/:id                          "Meine Dokumente"
  *   POST /api/forms/:formId/draft      create / update the application draft ({values})
  *   POST /api/forms/:formId/submit     submit after the citizen confirmed ({values})
  *   GET  /api/appointments             the citizen's appointments ("Meine Termine")
@@ -29,7 +31,10 @@ import { decisionProvider, hasGemini, modelIds } from "../config";
 import { GovError } from "../gov/errors";
 import * as gov from "../gov/service";
 import { preferencesFrom, runMemoryDecision } from "../memory/extract";
-import { clearMemory, deleteMemoryItem, listMemory } from "../memory/store";
+import { clearMemory, deleteMemoryItem, listMemory, updateMemoryItem, upsertMemory } from "../memory/store";
+import { getAgentByName } from "agents";
+import { createConversation, deleteConversation, isConversationId, listConversations, renameConversation, touchConversation } from "../conversations/store";
+import { addDocument, getDocument, listDocuments, markCancelled } from "../documents/store";
 import { buildLiveSetup } from "../live/setup";
 import { getForm, missingRequired } from "../shared/forms";
 import { isValidLanguageCode } from "../shared/languages";
@@ -176,6 +181,28 @@ appApi.delete("/memory", async (c) => {
 	return c.json({ ok: true });
 });
 
+const memoryEntrySchema = z.object({
+	key: z.string().min(1).max(60).optional(),
+	value: z.string().min(1).max(500).optional(),
+	category: z.enum(["preference", "language", "barrier", "context"]).optional(),
+});
+
+/** The citizen adds an entry themselves ("Was IDA sich merkt"). */
+appApi.post("/memory", async (c) => {
+	const body = memoryEntrySchema.safeParse(await c.req.json().catch(() => ({})));
+	if (!body.success || !body.data.key || !body.data.value) throw new GovError(400, "key and value are required");
+	await upsertMemory(c.env.GOV_DB, c.var.session.pid, [{ key: body.data.key, value: body.data.value, category: body.data.category ?? "preference", confidence: 1 }], "explicit");
+	return c.json(await listMemory(c.env.GOV_DB, c.var.session.pid));
+});
+
+/** The citizen corrects an entry. */
+appApi.patch("/memory/:id", async (c) => {
+	const body = memoryEntrySchema.safeParse(await c.req.json().catch(() => ({})));
+	if (!body.success) throw new GovError(400, body.error.message);
+	const ok = await updateMemoryItem(c.env.GOV_DB, c.var.session.pid, c.req.param("id"), body.data);
+	return c.json({ ok }, ok ? 200 : 404);
+});
+
 appApi.delete("/memory/:id", async (c) => {
 	const ok = await deleteMemoryItem(c.env.GOV_DB, c.var.session.pid, c.req.param("id"));
 	return c.json({ ok }, ok ? 200 : 404);
@@ -223,8 +250,81 @@ appApi.post("/forms/:formId/submit", async (c) => {
 	const missing = missingRequired(form, body.values);
 	if (missing.length) throw new GovError(400, `Required fields missing: ${missing.join(", ")}`);
 	// Always write the latest form values into the draft, then submit (server-side validation).
-	const draft = await gov.startApplication(c.env, c.var.session.pid, form.serviceId, form.toServiceData(body.values), lang);
-	return c.json(await gov.submitApplication(c.env, draft.applicationId, lang));
+	const pid = c.var.session.pid;
+	const draft = await gov.startApplication(c.env, pid, form.serviceId, form.toServiceData(body.values), lang);
+	const result = await gov.submitApplication(c.env, draft.applicationId, lang);
+
+	// "Meine Dokumente": a copy of the submitted (German) form + the confirmation of the authority.
+	const profile = await gov.getCitizenProfile(c.env, pid);
+	const citizenName = `${profile.firstName} ${profile.lastName}`;
+	const applicationDocId = await addDocument(c.env.GOV_DB, pid, {
+		kind: "application",
+		title: form.title,
+		formId: form.id,
+		serviceId: form.serviceId,
+		referenceNumber: result.referenceNumber ?? undefined,
+		data: { values: body.values, submittedAt: result.submittedAt, authority: result.authority },
+	});
+	const isRegistration = form.serviceId === "change-of-residence";
+	const confirmationDocId = await addDocument(c.env.GOV_DB, pid, {
+		kind: "confirmation",
+		title: isRegistration ? "Meldebestätigung" : `Eingangsbestätigung – ${result.serviceName}`,
+		serviceId: form.serviceId,
+		referenceNumber: result.referenceNumber ?? undefined,
+		data: {
+			type: isRegistration ? "registration" : "receipt",
+			citizenName,
+			birthDate: profile.birthDate,
+			serviceName: result.serviceName,
+			authority: result.authority,
+			issuedAt: result.submittedAt,
+			details: result.data,
+			nextSteps: result.nextSteps,
+		},
+	});
+	return c.json({ ...result, applicationDocId, confirmationDocId });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Conversations (sidebar) and documents ("Meine Dokumente")
+// ---------------------------------------------------------------------------------------------
+
+appApi.get("/conversations", async (c) => c.json(await listConversations(c.env.GOV_DB, c.var.session.pid)));
+
+appApi.post("/conversations", async (c) => c.json(await createConversation(c.env.GOV_DB, c.var.session.pid)));
+
+/** Sets the title (e.g. for a conversation that only happened by voice) or renames it. */
+appApi.patch("/conversations/:id", async (c) => {
+	const id = c.req.param("id");
+	const body = z.object({ title: z.string().min(1).max(200), ifEmpty: z.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
+	if (!isConversationId(id) || !body.success) throw new GovError(400, "Invalid conversation or title");
+	// ifEmpty: only set a title if there is none yet (voice conversations); otherwise rename.
+	await touchConversation(c.env.GOV_DB, c.var.session.pid, id, body.data.title);
+	if (body.data.ifEmpty) return c.json({ ok: true });
+	return c.json({ ok: await renameConversation(c.env.GOV_DB, c.var.session.pid, id, body.data.title) });
+});
+
+appApi.delete("/conversations/:id", async (c) => {
+	const pid = c.var.session.pid;
+	const id = c.req.param("id");
+	if (!isConversationId(id)) throw new GovError(400, "Invalid conversation");
+	const ok = await deleteConversation(c.env.GOV_DB, pid, id);
+	// Also delete the stored messages in the chat agent (only the citizen's own instance).
+	try {
+		const agent = await getAgentByName(c.env.CitizenAssistant, `${pid}--${id}`);
+		await agent.wipeConversation();
+	} catch (err) {
+		console.warn("[conversations] could not wipe messages", err);
+	}
+	return c.json({ ok }, ok ? 200 : 404);
+});
+
+appApi.get("/documents", async (c) => c.json(await listDocuments(c.env.GOV_DB, c.var.session.pid)));
+
+appApi.get("/documents/:id", async (c) => {
+	const doc = await getDocument(c.env.GOV_DB, c.var.session.pid, c.req.param("id"));
+	if (!doc) throw new GovError(404, "Unknown document");
+	return c.json(doc);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -240,11 +340,32 @@ appApi.get("/appointments/slots", async (c) => {
 	return c.json(await gov.getAppointmentSlots(c.env, serviceId, Math.min(40, Number(c.req.query("limit")) || 24)));
 });
 
-appApi.post("/appointments/:bookingId/cancel", async (c) => c.json(await gov.cancelAppointment(c.env, c.var.session.pid, c.req.param("bookingId"))));
+appApi.post("/appointments/:bookingId/cancel", async (c) => {
+	const result = await gov.cancelAppointment(c.env, c.var.session.pid, c.req.param("bookingId"));
+	await markCancelled(c.env.GOV_DB, c.var.session.pid, result.referenceNumber);
+	return c.json(result);
+});
 
 appApi.post("/appointments/:slotId/book", async (c) => {
 	const lang = govLang(c.req.query("lang"));
-	return c.json(await gov.bookAppointment(c.env, c.var.session.pid, c.req.param("slotId"), lang));
+	const result = await gov.bookAppointment(c.env, c.var.session.pid, c.req.param("slotId"), lang);
+	const profile = await gov.getCitizenProfile(c.env, c.var.session.pid);
+	const confirmationDocId = await addDocument(c.env.GOV_DB, c.var.session.pid, {
+		kind: "confirmation",
+		title: `Terminbestätigung – ${result.serviceName}`,
+		referenceNumber: result.referenceNumber,
+		data: {
+			type: "appointment",
+			citizenName: `${profile.firstName} ${profile.lastName}`,
+			serviceName: result.serviceName,
+			authority: result.office,
+			office: result.office,
+			slotTime: result.slotTime,
+			issuedAt: new Date().toISOString(),
+			nextSteps: result.nextSteps,
+		},
+	});
+	return c.json({ ...result, confirmationDocId });
 });
 
 /** Debug helper: the system prompt the assistant currently gets (useful for the technical documentation). */

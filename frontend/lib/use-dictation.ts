@@ -8,7 +8,8 @@
  * - Every start gets its own session object + generation number, so a late async step of an old
  *   start (or React StrictMode double effects) can never keep a microphone open.
  * - Fallback when the Live API is unavailable: record a clip, transcribe it on stop (/api/transcribe).
- * - Stops automatically after 2 minutes or when the tab is hidden.
+ * - Stops automatically when the citizen stops talking (short pause after the last words), after
+ *   2 minutes, or when the tab is hidden. The dictated text stays in the field, ready to edit/send.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AssistantSettings } from "../../src/shared/types";
@@ -21,6 +22,10 @@ export type DictationState = "idle" | "connecting" | "recording" | "transcribing
 export type DictationTarget = { kind: "chat" } | { kind: "field"; fieldId: string };
 
 const MAX_MS = 120_000;
+/** Pause after the last recognised words that ends the dictation. */
+const SILENCE_MS = 2200;
+/** Nothing said at all → stop. */
+const NO_SPEECH_MS = 10_000;
 
 export function useDictation(getSettings: () => AssistantSettings, onError: (message: string) => void) {
 	const [state, setState] = useState<DictationState>("idle");
@@ -54,17 +59,25 @@ export function useDictation(getSettings: () => AssistantSettings, onError: (mes
 				if (!current()) return;
 				let committed = "";
 				let interim = "";
+				// Silence detection: every recognised text (re)arms the timer.
+				let silenceTimer = window.setTimeout(() => current() && void stop(), NO_SPEECH_MS);
+				const heardSomething = () => {
+					clearTimeout(silenceTimer);
+					silenceTimer = window.setTimeout(() => current() && void stop(), SILENCE_MS);
+				};
 				const joinText = (a: string, b: string) => (a && b && !/\s$/.test(a) && !/^\s/.test(b) ? `${a} ${b}` : a + b);
 				const session = new GeminiLiveSession(
 					{ wsUrl: tok.wsUrl, token: tok.token, model: tok.model, audioOutput: false },
 					{
 						onInterimTranscript: (text) => {
 							if (!current()) return;
+							heardSomething();
 							interim = text;
 							onText(joinText(committed, interim));
 						},
 						onInputTranscript: (chunk) => {
 							if (!current()) return;
+							heardSomething();
 							committed = joinText(committed, chunk.trim());
 							interim = "";
 							onText(committed);
@@ -75,6 +88,7 @@ export function useDictation(getSettings: () => AssistantSettings, onError: (mes
 				);
 				stopCurrent.current = async () => {
 					clearTimeout(timer);
+					clearTimeout(silenceTimer);
 					session.stop();
 				};
 				await session.start();

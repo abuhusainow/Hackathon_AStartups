@@ -62,6 +62,20 @@ export type MyAppointment = {
 	nextSteps: string[];
 };
 
+export type Conversation = { id: string; title: string; createdAt: string; updatedAt: string };
+
+export type CitizenDoc = {
+	id: string;
+	kind: "application" | "confirmation";
+	title: string;
+	formId: string | null;
+	serviceId: string | null;
+	referenceNumber: string | null;
+	status: "valid" | "cancelled";
+	data: Record<string, unknown>;
+	createdAt: string;
+};
+
 export class ApiError extends Error {
 	constructor(
 		public status: number,
@@ -91,6 +105,15 @@ export const api = {
 	memory: () => request<MemoryItem[]>("/api/memory"),
 	deleteMemory: (id: string) => request(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	clearMemory: () => request("/api/memory", { method: "DELETE" }),
+	addMemory: (entry: { key: string; value: string; category: MemoryItem["category"] }) => post<MemoryItem[]>("/api/memory", entry),
+	updateMemory: (id: string, patch: { value?: string; category?: MemoryItem["category"] }) =>
+		request<{ ok: boolean }>(`/api/memory/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+	conversations: () => request<Conversation[]>("/api/conversations"),
+	newConversation: () => post<Conversation>("/api/conversations"),
+	titleConversation: (id: string, title: string, ifEmpty = false) =>
+		request(`/api/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title, ifEmpty }) }),
+	deleteConversation: (id: string) => request(`/api/conversations/${id}`, { method: "DELETE" }),
+	documents: () => request<CitizenDoc[]>("/api/documents"),
 	ingestTranscript: (transcript: { role: "user" | "assistant"; text: string }[]) => post("/api/memory/ingest", { transcript }),
 	translateForm: (formId: string, lang: string) => post<{ texts: Record<string, string>; cached: boolean }>("/api/translate", { kind: "form", formId, lang }),
 	translateUi: (lang: string) => post<{ texts: Record<string, string> }>("/api/translate", { kind: "ui", lang }),

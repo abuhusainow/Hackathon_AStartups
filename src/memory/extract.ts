@@ -59,13 +59,22 @@ Use these exact keys when they apply (the app applies them automatically):
 ${Object.entries(PREFERENCE_KEYS)
 	.map(([k, d]) => `- ${k}: ${d}`)
 	.join("\n")}
-Otherwise use short snake_case English keys (e.g. "german_level", "vision", "hearing", "children", "contact_preference"). Values are short English phrases.
+Otherwise use short snake_case English keys (e.g. "german_level", "vision", "hearing", "children", "contact_preference").
+Values are short phrases in the language the citizen used (the citizen reads them on the page "Was IDA sich merkt"); for the fixed keys above use the formats given.
 If the citizen mentions a barrier that a setting can solve, ALSO set the matching key (e.g. "cannot read small text" → vision + text_size "1.5"; "please simpler" → easy_language "true").
 If a new statement contradicts an existing memory, upsert the new value (same key). Put keys that are no longer true into "deletes".
 If nothing new is worth remembering, return empty arrays.
 Also write "summary": 1–2 sentences (English) about what the citizen wanted in this conversation and how far they got.
 
 Answer with JSON only, no prose: {"upserts":[{"key":"...","value":"...","category":"...","confidence":0.9}],"deletes":["..."],"summary":"..."}`;
+
+const BLOCKED_KEY = /(application|applying|apply|antrag|request|current_|form|appointment|termin|booking|address|adresse|landlord|move|moved|date|name|reference|iban|svnr|social_security|passport_number|id_number|document_number)/;
+
+/** Keys the app understands are always fine; everything that looks like one-off case data is dropped. */
+export function keepMemoryKey(key: string): boolean {
+	const k = key.toLowerCase();
+	return k in PREFERENCE_KEYS || !BLOCKED_KEY.test(k);
+}
 
 /** Extracts the first JSON object from a model answer (some models wrap JSON in prose or code fences). */
 export function parseDecision(text: string): MemoryDecision | null {
@@ -104,6 +113,8 @@ export async function runMemoryDecision(
 		console.warn(`[memory] ${provider} returned no valid decision`, result.text.slice(0, 300));
 		return null;
 	}
+	// Safety net for the rules above: never keep one-off application data or identifiers.
+	decision.upserts = decision.upserts.filter((u) => keepMemoryKey(u.key));
 	if (decision.upserts.length) await upsertMemory(env.GOV_DB, input.citizenId, decision.upserts, input.source);
 	if (decision.deletes.length) await deleteMemoryKeys(env.GOV_DB, input.citizenId, decision.deletes);
 	if (decision.summary) await saveSummary(env.GOV_DB, input.citizenId, input.sessionId, decision.summary);

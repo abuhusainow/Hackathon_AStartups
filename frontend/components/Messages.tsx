@@ -68,6 +68,18 @@ function RefNumber({ t, value }: { t: T; value: string }) {
 	);
 }
 
+/** Opens "Meine Dokumente" (handled by the portal). */
+function DocsLink({ t }: { t: T }) {
+	return (
+		<button type="button" className="btn btn-ghost btn-sm" onClick={() => window.dispatchEvent(new CustomEvent("ida:navigate", { detail: "documents" }))}>
+			<span className="material-symbols-outlined" aria-hidden="true">
+				folder_shared
+			</span>
+			{t("docsShow")}
+		</button>
+	);
+}
+
 export function ResultCard({ t, output }: { t: T; output: ResultLike }) {
 	if ((output.submitted || output.type === "submission_result") && output.referenceNumber)
 		return (
@@ -88,6 +100,7 @@ export function ResultCard({ t, output }: { t: T; output: ResultLike }) {
 						))}
 					</ul>
 				)}
+				<DocsLink t={t} />
 			</div>
 		);
 	if ((output.booked || output.type === "booking_result") && output.referenceNumber)
@@ -112,6 +125,7 @@ export function ResultCard({ t, output }: { t: T; output: ResultLike }) {
 						))}
 					</ul>
 				)}
+				<DocsLink t={t} />
 			</div>
 		);
 	if (output.type === "handoff_result")

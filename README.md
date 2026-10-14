@@ -11,7 +11,12 @@ Aufgebaut auf dem [Starter-Template](https://github.com/Nlea/austrian-startup-su
 - **Login mit ID Austria (simuliert)** → IDA kennt die Registerdaten der Person und füllt Formulare vor.
 - **Text-Chat** mit Gemini und Werkzeugen (Leistung finden, Anspruch prüfen, amtliche Infos, Termin, Rückruf durch Menschen).
 - **Live-Sprachdialog** (Gemini Live, Voice-to-Voice) mit Live-Untertiteln – IDA füllt das Formular *während des Gesprächs* aus.
-- **Diktieren direkt im Eingabefeld** (Chat und jedes Formularfeld) – der Text erscheint live, das Mikrofon wird beim Beenden sofort freigegeben.
+- **Diktieren direkt im Eingabefeld** (Chat und jedes Formularfeld) – der Text erscheint live; bei einer Sprechpause oder auf „Stopp“
+  endet die Aufnahme, der fertige Text steht im Feld bereit, das Mikrofon wird sofort freigegeben.
+- **Seitenleiste wie in gängigen KI-Chats:** neues Gespräch, frühere Gespräche (wieder öffnen, löschen), Meine Termine,
+  Meine Dokumente, Postkorb (Platzhalter) und **„Was IDA sich merkt“** (Gedächtnis ansehen, bearbeiten, ergänzen, löschen).
+- **Meine Dokumente:** eingereichte Anträge (Kopie des Originalformulars), Bestätigungen (z. B. Meldebestätigung,
+  Terminbestätigung) und die Ausweise aus dem Register – ansehen, drucken / als PDF speichern.
 - **Termine:** IDA zeigt freie Termine **visuell im rechten Panel** (Wunschzeit wird hervorgehoben), Buchung nur nach Bestätigung;
   Seite **„Meine Termine“** (`/termine`) mit Kalender-Export (.ics), Stornieren und Neubuchung. Referenznummern erscheinen
   auch im Sprachdialog als Karte (kopierbar).
