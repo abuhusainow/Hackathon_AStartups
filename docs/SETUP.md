@@ -148,6 +148,22 @@ Logs live ansehen: `npx wrangler tail` oder Dashboard → *Workers & Pages → i
 
 ---
 
+### 6.4 Alternative: automatisches Deployment über GitHub (Workers Builds)
+
+Dashboard → *Workers & Pages → Create → Import a repository* → Repo und Branch wählen:
+
+| Einstellung | Wert |
+|---|---|
+| Build command | `pnpm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Root directory | `/` |
+
+- Die pnpm-Version ist in `package.json` fest vorgegeben (`"packageManager": "pnpm@10.28.0"`). Ohne diese Angabe
+  installiert die Build-Umgebung eine andere pnpm-Version und bricht mit **„packages field missing or empty“** ab.
+- Secrets **nicht** als *Build variables*, sondern unter *Worker → Settings → Variables and Secrets* als **Secret** anlegen:
+  `GEMINI_API_KEY`, `SESSION_SECRET` (optional `ANTHROPIC_API_KEY`). Danach einmal neu deployen.
+- Der Build-Token braucht Rechte für Workers, D1 und KV (D1-Datenbank und KV-Namespace werden beim ersten Deploy angelegt).
+
 ## 7. Modelle & AI Gateway (optional, empfohlen)
 
 Alle Modell-IDs sind Variablen in `wrangler.jsonc` → ohne Code-Änderung austauschbar:
@@ -179,6 +195,7 @@ Alle Modell-IDs sind Variablen in `wrangler.jsonc` → ohne Code-Änderung austa
 
 | Problem | Lösung |
 |---|---|
+| Cloudflare-Build: `ERROR packages field missing or empty` | Falsche pnpm-Version in der Build-Umgebung. `"packageManager": "pnpm@10.28.0"` muss in `package.json` stehen (ist im Repo gesetzt) |
 | `Property 'CACHE' does not exist on type 'Env'` | `pnpm cf-typegen` nach Änderungen an `wrangler.jsonc` |
 | Chat antwortet „Es ist ein Fehler aufgetreten“ | Gemini überlastet oder Kontingent aufgebraucht (429). Fallback-Modelle greifen automatisch; sonst `GEMINI_TEXT_FALLBACKS` anpassen, Billing im AI Studio aktivieren, Logs prüfen |
 | Sprachdialog startet nicht | Mikrofon-Freigabe im Browser; nur `https://` / `localhost`; Kontingent für Live-Modelle prüfen |
